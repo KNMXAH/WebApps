@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>중학생을 위한 원자 AR 관찰 앱</title>
+    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+    <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
+    <style>
+        #ui { position: absolute; top: 10px; right: 10px; z-index: 1000; background: white; padding: 10px; border-radius: 5px; font-family: sans-serif; }
+    </style>
+</head>
+<body style="margin: 0; overflow: hidden;">
+    <div id="ui">
+        <input type="checkbox" id="realSizeToggle"> <label for="realSizeToggle"><b>Real Size</b></label>
+    </div>
+
+    <a-scene embedded arjs="sourceType: webcam; patternRatio: 0.9;">
+        <!-- 본인의 patt 파일 경로로 수정하세요 -->
+        <a-marker type="pattern" url="marker.patt">
+            <a-entity id="atom" position="0 0.5 0">
+                <!-- 하얀 껍질 (원자 전체의 크기를 나타냄, 반지름 1) -->
+                <a-sphere id="shell" radius="1" color="white" opacity="0.8" transparent="true"></a-sphere>
+                <!-- 원자핵 및 전자 컨테이너 -->
+                <a-entity id="nucleus-container"></a-entity>
+                <a-entity id="electrons-container"></a-entity>
+            </a-entity>
+        </a-marker>
+        <a-entity camera></a-entity>
+    </a-scene>
+
+    <script>
+        const protonsCount = Math.floor(Math.random() * 4) + 1;
+        const atom = document.querySelector('#atom');
+        const shell = document.querySelector('#shell');
+        const nucleusContainer = document.querySelector('#nucleus-container');
+        const electronsContainer = document.querySelector('#electrons-container');
+        const toggle = document.querySelector('#realSizeToggle');
+
+        function createAtom() {
+            // 1. 원자핵 생성 (양성자 + 중성자)
+            // 양성자가 1개면 중성자 0개, 2개 이상이면 양성자 수 = 중성자 수
+            const neutronCount = (protonsCount === 1) ? 0 : protonsCount;
+            const totalNucleons = protonsCount + neutronCount;
+
+            // 원자핵 뭉치 표현 (여러 개의 구가 서로 붙어있는 형태)
+            for (let i = 0; i < totalNucleons; i++) {
+                const nucleon = document.createElement('a-sphere');
+                // 양성자는 빨간색, 중성자는 회색으로 표현
+                nucleon.setAttribute('color', i < protonsCount ? '#ff4d4d' : '#cccccc');
+                nucleon.setAttribute('radius', '0.04');
+                
+                // 약간씩 뭉쳐있도록 위치 분산
+                const angle = (i / totalNucleons) * Math.PI * 2;
+                const offset = totalNucleons > 1 ? 0.03 : 0;
+                const x = Math.cos(angle) * offset;
+                const z = Math.sin(angle) * offset;
+                nucleon.setAttribute('position', `${x} 0 ${z}`);
+                
+                // 기본 모드용 스케일 태그 부여
+                nucleon.classList.add('component-scale');
+                nucleusContainer.appendChild(nucleon);
+            }
+
+            // 2. 전자 생성 (양성자 수와 동일)
+            for (let i = 0; i < protonsCount; i++) {
+                const orbit = document.createElement('a-entity');
+                // 각기 다른 방향과 속도로 회전하는 궤도 설정
+                orbit.setAttribute('animation', `property: rotation; to: ${360 * (i+1)} ${360 * (i+2)} 0; dur: ${2000 + i*600}; loop: true; easing: linear`);
+                
+                const electron = document.createElement('a-sphere');
+                electron.setAttribute('color', '#3399ff');
+                electron.setAttribute('radius', '0.015'); // 기본 모드에서의 크기
+                electron.setAttribute('position', `${0.6 + i*0.1} 0 0`); // 궤도 반지름
+                electron.classList.add('component-scale');
+                
+                orbit.appendChild(electron);
+                electronsContainer.appendChild(orbit);
+            }
+        }
+
+        // 거리 기반 투명도 및 Real Size 토글 처리 컴포넌트
+        AFRAME.registerComponent('camera-distance-handler', {
+            tick: function() {
+                const camera = document.querySelector('a-camera') || document.querySelector('[camera]');
+                const distance = this.el.object3D.position.distanceTo(camera.object3D.position);
+                
+                // 카메라가 가까이 오면(2미터 이내) 껍질이 투명해짐
+                shell.setAttribute('opacity', distance < 2 ? 0.15 : 0.8);
+                
+                // Real Size 토글 체크 여부 확인
+                const isReal = toggle.checked;
+                
+                // Real Size 체크 시: 원자핵과 전자의 실제 크기 비율 반영 (극단적으로 작게 설정, 예: 0.0005배)
+                // 가시성을 위해 완전히 0으로 만들면 안 보이므로 학생들이 인지할 수 있는 최소한의 극단적 비율(0.001배) 적용
+                const scaleValue = isReal ? 0.001 : 1;
+                
+                document.querySelectorAll('.component-scale').forEach(el => {
+                    el.setAttribute('scale', `${scaleValue} ${scaleValue} ${scaleValue}`);
+                });
+            }
+        });
+
+        atom.setAttribute('camera-distance-handler', '');
+        createAtom();
+    </script>
+</body>
+</html>
