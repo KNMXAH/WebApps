@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>중3 과학: 공 운동 분석 프로그램</title>
+    <!-- Tailwind CSS for modern UI -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- OpenCV.js -->
+    <script async src="https://docs.opencv.org/4.7.0/opencv.js" onload="onOpenCvReady()"></script>
+    <style>
+        .canvas-container {
+            position: relative;
+            display: inline-block;
+        }
+    </style>
+</head>
+
+<body class="bg-slate-50 text-slate-800 font-sans min-h-screen p-6">
+
+    <div class="max-w-6xl mx-auto">
+        <!-- Header -->
+        <header class="mb-8 text-center">
+            <h1 class="text-3xl font-bold text-blue-600 mb-2">⚽ 중3 물리학: 자유낙하 및 운동 분석기</h1>
+            <p class="text-slate-600">FPS와 기준자를 설정하고 구간을 프레임 단위로 선택하여 공의 운동을 분석해 보세요!</p>
+            <div id="status"
+                class="mt-3 inline-block px-4 py-1 bg-amber-100 text-amber-800 rounded-full text-sm font-semibold">
+                OpenCV 로딩 중...</div>
+        </header>
+
+        <!-- Main Content Grid -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+            <!-- Left & Center: Video / Canvas Area (2 Columns) -->
+            <div class="lg:col-span-2 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h2 class="text-lg font-bold mb-4 text-slate-700">1단계: 영상 및 환경 설정</h2>
+
+                <!-- FPS Input Field -->
+                <div class="mb-4 flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-200">
+                    <label class="text-sm font-semibold text-slate-700">🎞️ 영상 FPS 설정</label>
+                    <div class="flex items-center gap-2">
+                        <input type="number" id="fpsInput" value="30" min="1" max="120"
+                            class="w-20 px-3 py-1 bg-white border border-slate-300 rounded-lg text-center text-sm font-bold text-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <span class="text-xs text-slate-500">fps (보통 30 또는 60)</span>
+                    </div>
+                </div>
+
+                <!-- File Upload -->
+                <div class="mb-4">
+                    <input type="file" id="videoUpload" accept="video/*"
+                        class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                </div>
+
+                <!-- Hidden Video Element -->
+                <video id="videoInput" class="hidden" muted playsinline></video>
+
+                <!-- Visualization Canvas -->
+                <div
+                    class="canvas-container w-full bg-slate-900 rounded-xl overflow-hidden flex justify-center items-center mb-4 min-h-[300px]">
+                    <canvas id="outputCanvas" class="max-w-full h-auto cursor-crosshair"></canvas>
+                </div>
+
+                <!-- Scale Control Panel (기준자 설정) -->
+                <div id="scaleControlPanel" class="mb-4 p-4 bg-slate-50 rounded-xl border border-slate-200 hidden">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-sm font-semibold text-slate-700">📏 기준자(길이 보정) 설정</span>
+                        <span id="scaleStatusText" class="text-xs text-amber-600 font-bold">기준자 미설정 (선택사항)</span>
+                    </div>
+                    <div class="flex flex-wrap gap-3 items-center justify-between">
+                        <button id="setScaleModeBtn"
+                            class="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-xs font-semibold rounded-lg">기준자 양 끝
+                            지정하기</button>
+                        <div class="flex items-center gap-2">
+                            <input type="number" id="realLengthInput" value="1.0" step="0.1"
+                                class="w-20 px-2 py-1 bg-white border border-slate-300 rounded text-center text-xs font-bold text-blue-600">
+                            <select id="lengthUnitSelect"
+                                class="px-2 py-1 bg-white border border-slate-300 rounded text-xs">
+                                <option value="m">m</option>
+                                <option value="cm">cm</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Range Selector Controls -->
+                <div id="rangeControlPanel" class="mb-4 p-4 bg-slate-50 rounded-xl border border-slate-200 hidden">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-sm font-semibold text-slate-700">⏱️ 분석 구간 설정 (프레임 단위)</span>
+                        <span id="frameRangeText" class="text-xs text-blue-600 font-bold">Frame 0 ~ Frame 0</span>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="text-xs text-slate-500 block mb-1">시작 프레임</label>
+                            <div class="flex gap-2">
+                                <input type="range" id="startTimeRange" min="0" max="100" value="0"
+                                    class="w-full accent-blue-600">
+                                <button id="setStartBtn"
+                                    class="px-2 py-1 bg-slate-200 hover:bg-slate-300 text-xs rounded font-medium">현재위치</button>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="text-xs text-slate-500 block mb-1">종료 프레임</label>
+                            <div class="flex gap-2">
+                                <input type="range" id="endTimeRange" min="0" max="100" value="100"
+                                    class="w-full accent-blue-600">
+                                <button id="setEndBtn"
+                                    class="px-2 py-1 bg-slate-200 hover:bg-slate-300 text-xs rounded font-medium">현재위치</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Controls -->
+                <div class="flex flex-wrap gap-3 items-center justify-between">
+                    <div class="text-sm text-slate-500" id="guideText">영상을 업로드한 뒤 공을 마우스로 클릭해 지정해주세요.</div>
+                    <div class="flex gap-2">
+                        <button id="startBtn" disabled
+                            class="px-5 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 disabled:bg-slate-300 transition">추적
+                            시작</button>
+                        <button id="resetBtn"
+                            class="px-4 py-2 bg-slate-200 text-slate-700 font-semibold rounded-lg hover:bg-slate-300 transition">초기화</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right: Data Table & Download (1 Column) -->
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-bold text-slate-700">2단계: 분석 데이터</h2>
+                    <button id="downloadBtn" disabled
+                        class="px-3 py-1.5 bg-emerald-600 text-white text-sm font-semibold rounded-lg hover:bg-emerald-700 disabled:bg-slate-300 transition">엑셀(CSV)
+                        저장</button>
+                </div>
+
+                <!-- Table Container -->
+                <div class="flex-grow overflow-y-auto max-h-[400px] border border-slate-100 rounded-lg mb-4">
+                    <table class="w-full text-left border-collapse">
+                        <thead class="bg-slate-100 sticky top-0 text-xs text-slate-600 uppercase">
+                            <tr>
+                                <th class="p-2 border-b">시간(s)</th>
+                                <th class="p-2 border-b">X 좌표</th>
+                                <th class="p-2 border-b">Y 좌표</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dataTableBody" class="text-sm text-slate-700">
+                            <tr>
+                                <td colspan="3" class="p-4 text-center text-slate-400">데이터가 없습니다.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="bg-blue-50 p-4 rounded-xl text-xs text-blue-800 leading-relaxed">
+                    💡 **Tip:** 기준자를 설정하면 픽셀 단위 대신 실제 거리 단위(m, cm)로 데이터가 환산되며, 위로 올라갈수록 Y값이 증가합니다!
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        let cvReady = false;
+        let video = document.getElementById('videoInput');
+        let canvas = document.getElementById('outputCanvas');
+        let ctx = canvas.getContext('2d');
+
+        let trackingData = [];
+        let templateMat = null;
+        let isTracking = false;
+        let totalFrames = 0;
+
+        // 기준자 관련 변수
+        let scalePoints = [];
+        let isScaleMode = false;
+        let pixelPerUnit = 0;
+
+        // 공 영역 설정 관련 변수
+        let boxCenter = { x: 0, y: 0 };
+        let boxSize = 40;
+        let isSettingBox = false;
+        let isDragging = false;
+
+        // 추적 후 캔버스
+        let stroboscopicCanvas = null;
+
+
+        function onOpenCvReady() {
+            cvReady = true;
+            document.getElementById('status').innerText = 'OpenCV 준비 완료!';
+            document.getElementById('status').className = 'mt-3 inline-block px-4 py-1 bg-emerald-100 text-emerald-800 rounded-full text-sm font-semibold';
+        }
+
+        function getUserFps() {
+            let fpsVal = parseInt(document.getElementById('fpsInput').value);
+            return (isNaN(fpsVal) || fpsVal <= 0) ? 30 : fpsVal;
+        }
+
+        // 1. 영상 업로드 처리
+        const videoUpload = document.getElementById('videoUpload');
+        videoUpload.addEventListener('change', function (e) {
+            let file = e.target.files[0];
+            if (!file) return;
+
+            let url = URL.createObjectURL(file);
+            video.src = url;
+            video.load();
+
+            video.onloadedmetadata = function () {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+
+                let fps = getUserFps();
+                totalFrames = Math.floor(video.duration * fps);
+
+                let startRange = document.getElementById('startTimeRange');
+                let endRange = document.getElementById('endTimeRange');
+                startRange.max = totalFrames;
+                endRange.max = totalFrames;
+                startRange.value = 0;
+                endRange.value = totalFrames;
+                updateFrameRangeText();
+
+                document.getElementById('rangeControlPanel').classList.remove('hidden');
+                document.getElementById('scaleControlPanel').classList.remove('hidden');
+                video.currentTime = 0;
+            };
+        });
+
+        video.addEventListener('seeked', function () {
+            if (!isTracking && templateMat === null && !isScaleMode && !isSettingBox) {
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                document.getElementById('guideText').innerText = "화면의 '공' 위치를 클릭하세요. 기본 영역이 표시됩니다.";
+            }
+        });
+
+        // 프레임 구간 슬라이더 이벤트
+        const startTimeRange = document.getElementById('startTimeRange');
+        const endTimeRange = document.getElementById('endTimeRange');
+
+        startTimeRange.addEventListener('input', () => {
+            let startF = parseInt(startTimeRange.value);
+            let endF = parseInt(endTimeRange.value);
+            let fps = getUserFps();
+            if (startF >= endF) {
+                startTimeRange.value = endF - 1;
+            }
+            video.currentTime = parseInt(startTimeRange.value) / fps;
+            updateFrameRangeText();
+        });
+
+        endTimeRange.addEventListener('input', () => {
+            let startF = parseInt(startTimeRange.value);
+            let endF = parseInt(endTimeRange.value);
+            let fps = getUserFps();
+            if (endF <= startF) {
+                endTimeRange.value = startF + 1;
+            }
+            video.currentTime = parseInt(endTimeRange.value) / fps;
+            updateFrameRangeText();
+        });
+
+        // 추가: 종료 프레임 슬라이드바에서 손을 땠을 때(조작 완료 시) 다시 시작 프레임 위치로 이동
+        endTimeRange.addEventListener('change', () => {
+            let startF = parseInt(startTimeRange.value);
+            let fps = getUserFps();
+
+            // 시작 프레임 위치로 복귀
+            video.currentTime = startF / fps;
+        });
+
+        document.getElementById('setStartBtn').addEventListener('click', () => {
+            let fps = getUserFps();
+            let currentF = Math.round(video.currentTime * fps);
+            startTimeRange.value = currentF;
+            updateFrameRangeText();
+        });
+
+        document.getElementById('setEndBtn').addEventListener('click', () => {
+            let fps = getUserFps();
+            let currentF = Math.round(video.currentTime * fps);
+            endTimeRange.value = currentF;
+            updateFrameRangeText();
+        });
+
+        function updateFrameRangeText() {
+            document.getElementById('frameRangeText').innerText = `Frame ${startTimeRange.value} ~ Frame ${endTimeRange.value}`;
+        }
+
+        function redrawStroboCanvas() {
+            if (stroboscopicCanvas) {
+                ctx.drawImage(stroboscopicCanvas, 0, 0);
+            }
+        }
+
+        function highlightPoint(index) {
+            if (!stroboscopicCanvas || !trackingData[index]) return;
+
+            // 전체 궤적 초기화 후 그림
+            ctx.drawImage(stroboscopicCanvas, 0, 0);
+
+            // 특정 데이터의 실제 픽셀 좌표 역계산
+            let pt = trackingData[index];
+            let px = pixelPerUnit > 0 ? pt.x * pixelPerUnit : parseFloat(pt.x);
+            let py = pixelPerUnit > 0 ? pt.y * pixelPerUnit : parseFloat(pt.y);
+            let rawBallY = canvas.height - py;
+
+            // 파란색 강조 점 그리기
+            ctx.beginPath();
+            ctx.arc(px, rawBallY, 6, 0, 2 * Math.PI);
+            ctx.fillStyle = '#3b82f6'; // 파란색
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#ffffff';
+            ctx.stroke();
+        }
+
+        // 데이터 삭제
+        function deleteDataPoint(event, index) {
+            event.stopPropagation(); // 행 호버/클릭 이벤트 전파 방지
+
+            // 데이터 배열에서 해당 인덱스 제거
+            trackingData.splice(index, 1);
+
+            // 테이블 다시 그리기
+            let tbody = document.getElementById('dataTableBody');
+            tbody.innerHTML = '';
+
+            if (trackingData.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="3" class="p-4 text-center text-slate-400">데이터가 없습니다.</td></tr>`;
+                document.getElementById('downloadBtn').setAttribute('disabled', 'true');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                return;
+            }
+
+            let unitStr = pixelPerUnit > 0 ? document.getElementById('lengthUnitSelect').value : 'px';
+            trackingData.forEach((item, idx) => {
+                updateTable(idx, item.t, item.x, item.y, item.unit);
+            });
+
+            // stroboscopicCanvas 다시 생성 및 갱신 로직 추가 필요 (남은 좌표들만 다시 찍어주기)
+            rebuildStroboCanvas();
+        }
+
+        function rebuildStroboCanvas() {
+            if (!stroboscopicCanvas) return;
+            let stroboCtx = stroboscopicCanvas.getContext('2d');
+
+            // 1. 캔버스를 초기화합니다.
+            stroboCtx.clearRect(0, 0, stroboscopicCanvas.width, stroboscopicCanvas.height);
+
+            // 2. [해결] 배경이 투명해지지 않도록 현재 비디오 화면을 캔버스 배경으로 먼저 그려줍니다!
+            stroboCtx.drawImage(video, 0, 0, stroboscopicCanvas.width, stroboscopicCanvas.height);
+
+            // 3. 남은 trackingData를 바탕으로 빨간 점들을 다시 찍어줍니다.
+            trackingData.forEach(item => {
+                let px = pixelPerUnit > 0 ? item.x * pixelPerUnit : parseFloat(item.x);
+                let py = pixelPerUnit > 0 ? item.y * pixelPerUnit : parseFloat(item.y);
+                let rawBallY = stroboscopicCanvas.height - py;
+
+                stroboCtx.beginPath();
+                stroboCtx.arc(px, rawBallY, 4, 0, 2 * Math.PI);
+                stroboCtx.fillStyle = '#ff0000';
+                stroboCtx.fill();
+            });
+
+            redrawStroboCanvas();
+        }
+
+        // 기준자 설정 버튼 이벤트
+        document.getElementById('setScaleModeBtn').addEventListener('click', () => {
+            isScaleMode = true;
+            isSettingBox = false;
+            scalePoints = [];
+            document.getElementById('scaleStatusText').innerText = "화면에서 기준자의 [시작점]을 클릭하세요.";
+            document.getElementById('scaleStatusText').className = "text-xs text-blue-600 font-bold";
+            document.getElementById('guideText').innerText = "기준자 설정 중: 영상 위에서 기준자의 시작 위치를 클릭하세요.";
+        });
+
+        // 2. Canvas 마우스 이벤트 (기준자 설정 및 공 영역 지정)
+        canvas.addEventListener('click', function (e) {
+            if (!cvReady || isTracking || video.src === "") return;
+            if (isSettingBox) {
+                isSettingBox = false;
+                return
+            }
+
+            let rect = canvas.getBoundingClientRect();
+            let scaleX = canvas.width / rect.width;
+            let scaleY = canvas.height / rect.height;
+            let clickX = (e.clientX - rect.left) * scaleX;
+            let clickY = (e.clientY - rect.top) * scaleY;
+
+            // 기준자 설정 모드일 때
+            if (isScaleMode) {
+                scalePoints.push({ x: clickX, y: clickY });
+                if (scalePoints.length === 1) {
+                    document.getElementById('scaleStatusText').innerText = "화면에서 기준자의 [끝점]을 클릭하세요.";
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    ctx.fillStyle = 'blue';
+                    ctx.beginPath();
+                    ctx.arc(clickX, clickY, 4, 0, 2 * Math.PI);
+                    ctx.fill();
+                } else if (scalePoints.length === 2) {
+                    isScaleMode = false;
+                    let dx = scalePoints[1].x - scalePoints[0].x;
+                    let dy = scalePoints[1].y - scalePoints[0].y;
+                    let pixelLength = Math.sqrt(dx * dx + dy * dy);
+
+                    let realVal = parseFloat(document.getElementById('realLengthInput').value);
+                    pixelPerUnit = pixelLength / realVal;
+
+                    let unitStr = document.getElementById('lengthUnitSelect').value;
+                    document.getElementById('scaleStatusText').innerText = `설정 완료! (${pixelLength.toFixed(1)}px = ${realVal}${unitStr})`;
+                    document.getElementById('scaleStatusText').className = "text-xs text-emerald-600 font-bold";
+                    document.getElementById('guideText').innerText = "기준자 설정 완료. 공의 위치를 클릭해주세요.";
+
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    ctx.strokeStyle = 'blue';
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.moveTo(scalePoints[0].x, scalePoints[0].y);
+                    ctx.lineTo(scalePoints[1].x, scalePoints[1].y);
+                    ctx.stroke();
+                }
+                return;
+            }
+
+
+            // 공 지정: 최초 클릭한 위치를 중심점(boxCenter)으로 고정
+            boxCenter.x = Math.floor(clickX);
+            boxCenter.y = Math.floor(clickY);
+            boxSize = 40;
+            isSettingBox = true;
+
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = 'blue';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(boxCenter.x - boxSize / 2, boxCenter.y - boxSize / 2, boxSize, boxSize);
+
+            ctx.fillStyle = 'red';
+            ctx.beginPath();
+            ctx.arc(boxCenter.x, boxCenter.y, 4, 0, 2 * Math.PI);
+            ctx.fill();
+
+            document.getElementById('guideText').innerText = "기본 영역이 생성되었습니다. 직사각형을 드래그하여 대칭 크기를 조절한 뒤 떼세요.";
+        });
+
+        canvas.addEventListener('mousedown', function (e) {
+            if (isScaleMode || isTracking) return;
+            if (isSettingBox) {
+                isDragging = true;
+            }
+        });
+
+        canvas.addEventListener('mousemove', function (e) {
+            let rect = canvas.getBoundingClientRect();
+            let scaleX = canvas.width / rect.width;
+            let scaleY = canvas.height / rect.height;
+            let currentX = (e.clientX - rect.left) * scaleX;
+            let currentY = (e.clientY - rect.top) * scaleY;
+
+            if (isScaleMode && scalePoints.length === 1) {
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'blue';
+                ctx.beginPath();
+                ctx.arc(scalePoints[0].x, scalePoints[0].y, 4, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.strokeStyle = 'blue';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(scalePoints[0].x, scalePoints[0].y);
+                ctx.lineTo(currentX, currentY);
+                ctx.stroke();
+                return;
+            }
+
+            if (!isDragging || !isSettingBox) return;
+
+            // 수정: 중심점(boxCenter)과 현재 마우스 위치의 X, Y 거리 차이 중 최댓값을 반지름으로 삼아 박스 크기 계산
+            let distX = Math.abs(currentX - boxCenter.x);
+            let distY = Math.abs(currentY - boxCenter.y);
+            boxSize = Math.max(distX, distY) * 2;
+            if (boxSize < 10) boxSize = 10;
+
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // 수정: 항상 최초 클릭한 boxCenter를 기준으로 정확한 사각형 그리기
+            ctx.strokeStyle = 'blue';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(
+                boxCenter.x - boxSize / 2,
+                boxCenter.y - boxSize / 2,
+                boxSize,
+                boxSize
+            );
+
+            ctx.fillStyle = 'red';
+            ctx.beginPath();
+            ctx.arc(boxCenter.x, boxCenter.y, 4, 0, 2 * Math.PI);
+            ctx.fill();
+        });
+
+        canvas.addEventListener('mouseup', function (e) {
+            if (!isDragging || !isSettingBox) return;
+            isDragging = false;
+
+            // 수정: 최초 클릭했던 boxCenter를 기준으로 고정된 크기/위치 계산
+            let rx = boxCenter.x - boxSize / 2;
+            let ry = boxCenter.y - boxSize / 2;
+
+            let src = cv.imread(canvas);
+            let rectRoi = new cv.Rect(
+                Math.max(0, Math.floor(rx)),
+                Math.max(0, Math.floor(ry)),
+                Math.min(boxSize, src.cols - rx),
+                Math.min(boxSize, src.rows - ry)
+            );
+
+            if (templateMat) templateMat.delete();
+            templateMat = src.roi(rectRoi);
+            console.log("ROI 센터 좌표: ", boxCenter.x, boxCenter.y)
+            console.log("rect (x, y, w, h): ", Math.max(0, Math.floor(rx)), Math.max(0, Math.floor(ry)), Math.min(boxSize, src.cols - rx), Math.min(boxSize, src.rows - ry))
+
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = 'red';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(rectRoi.x, rectRoi.y, rectRoi.width, rectRoi.height);
+
+            // 수정: 시각적으로 중심점(red dot)을 함께 그려주어 위치가 변하지 않았음을 명확히 표시
+            ctx.fillStyle = 'red';
+            ctx.beginPath();
+            ctx.arc(boxCenter.x, boxCenter.y, 4, 0, 2 * Math.PI);
+            ctx.fill();
+
+            src.delete();
+
+            let startF = parseInt(startTimeRange.value);
+            let currentFps = getUserFps();
+            let currTime = 0.000;
+            let ballX = boxCenter.x;
+            let rawBallY = boxCenter.y;
+            let ballY = canvas.height - rawBallY;
+
+            let unitStr = document.getElementById('lengthUnitSelect').value;
+            let displayX = pixelPerUnit > 0 ? (ballX / pixelPerUnit).toFixed(2) : Math.round(ballX);
+            let displayY = pixelPerUnit > 0 ? (ballY / pixelPerUnit).toFixed(2) : Math.round(ballY);
+
+            trackingData = [{ t: currTime, x: displayX, y: displayY, unit: pixelPerUnit > 0 ? unitStr : 'px' }];
+            document.getElementById('dataTableBody').innerHTML = '';
+            updateTable(0, currTime, displayX, displayY, pixelPerUnit > 0 ? unitStr : 'px');
+
+            document.getElementById('startBtn').removeAttribute('disabled');
+            document.getElementById('guideText').innerText = "공 영역 설정 완료! 구간 프레임을 확인하고 '추적 시작'을 누르세요.";
+        });
+
+        // 3. 자동 추적 및 프레임 구간 분석 시작
+        document.getElementById('startBtn').addEventListener('click', async function () {
+            if (!templateMat) return;
+            isTracking = true;
+            this.setAttribute('disabled', 'true');
+            document.getElementById('guideText').innerText = "선택된 프레임 구간을 분석 중입니다...";
+
+            trackingData = [];
+            document.getElementById('dataTableBody').innerHTML = '';
+
+            let startF = parseInt(startTimeRange.value);
+            let endF = parseInt(endTimeRange.value);
+            let currentFps = getUserFps();
+
+            let tempCanvasForCv = document.createElement('canvas');
+            tempCanvasForCv.width = canvas.width;
+            tempCanvasForCv.height = canvas.height;
+            let tempCtx = tempCanvasForCv.getContext('2d');
+
+            stroboscopicCanvas = document.createElement('canvas');
+            stroboscopicCanvas.width = canvas.width;
+            stroboscopicCanvas.height = canvas.height;
+            let stroboCtx = stroboscopicCanvas.getContext('2d');
+
+            function seekToFrame(frameNumber) {
+                return new Promise((resolve) => {
+                    video.currentTime = frameNumber / currentFps;
+                    video.onseeked = () => {
+                        video.onseeked = null;
+                        resolve();
+                    };
+                });
+            }
+
+            for (let currentF = startF; currentF <= endF; currentF++) {
+                if (!isTracking) break;
+
+                await seekToFrame(currentF);
+
+                tempCtx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                let frame = cv.imread(tempCanvasForCv);
+
+                if (!frame.empty()) {
+                    let dst = new cv.Mat();
+                    cv.matchTemplate(frame, templateMat, dst, cv.TM_CCOEFF_NORMED);
+                    let result = cv.minMaxLoc(dst);
+                    let matchLoc = result.maxLoc;
+
+                    let elapsedFrames = currentF - startF;
+                    let currTime = parseFloat((elapsedFrames / currentFps).toFixed(7));
+                    let ballX = matchLoc.x + templateMat.cols / 2;
+                    let rawBallY = matchLoc.y + templateMat.rows / 2;
+                    let ballY = canvas.height - rawBallY;
+
+                    let unitStr = document.getElementById('lengthUnitSelect').value;
+                    let displayX = pixelPerUnit > 0 ? (ballX / pixelPerUnit).toFixed(2) : Math.round(ballX);
+                    let displayY = pixelPerUnit > 0 ? (ballY / pixelPerUnit).toFixed(2) : Math.round(ballY);
+
+                    trackingData.push({ t: currTime, x: displayX, y: displayY, unit: pixelPerUnit > 0 ? unitStr : 'px' });
+                    updateTable(trackingData.length - 1, currTime, displayX, displayY, pixelPerUnit > 0 ? unitStr : 'px');
+
+                    cv.imshow(canvas, frame);
+                    ctx.strokeStyle = '#00ff00';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(matchLoc.x, matchLoc.y, templateMat.cols, templateMat.rows);
+
+                    let roiRect = new cv.Rect(
+                        Math.max(0, matchLoc.x), Math.max(0, matchLoc.y),
+                        Math.min(templateMat.cols, frame.cols - matchLoc.x), Math.min(templateMat.rows, frame.rows - matchLoc.y)
+                    );
+                    let currentRoi = frame.roi(roiRect);
+
+                    stroboCtx.drawImage(tempCanvasForCv, roiRect.x, roiRect.y, roiRect.width, roiRect.height, roiRect.x, roiRect.y, roiRect.width, roiRect.height);
+                    stroboCtx.beginPath();
+                    stroboCtx.arc(ballX, rawBallY, 4, 0, 2 * Math.PI);
+                    stroboCtx.fillStyle = '#ff0000';
+                    stroboCtx.fill();
+
+                    currentRoi.delete();
+                    dst.delete();
+                    frame.delete();
+                }
+
+                await new Promise(r => setTimeout(r, 20));
+            }
+
+            isTracking = false;
+            ctx.drawImage(stroboscopicCanvas, 0, 0);
+            document.getElementById('guideText').innerText = "분석 완료! 우측에서 데이터를 확인하고 저장하세요.";
+            if (trackingData.length > 0) {
+                document.getElementById('downloadBtn').removeAttribute('disabled');
+            }
+        });
+
+        function updateTable(index, t, x, y, unit) {
+            let tbody = document.getElementById('dataTableBody');
+            if (tbody.querySelector('td[colspan]')) {
+                tbody.innerHTML = '';
+            }
+            let row = `<tr class="group hover:bg-slate-50 transition relative cursor-pointer" data-index="${index}" onmouseenter="highlightPoint(${index})" onmouseleave="redrawStroboCanvas()">
+                <td class="p-2 border-b">${t}s</td>
+                <td class="p-2 border-b">${x}${unit}</td>
+                <td class="p-2 border-b flex justify-between items-center">
+                    <span>${y}${unit}</span>
+                    <!-- group-hover:opacity-100 이 작동하려면 부모 tr에 group 클래스가 필수입니다 -->
+                    <button onclick="deleteDataPoint(event, ${index})" class="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-600 font-bold px-1.5 rounded transition">❌</button>
+                </td>
+            </tr>`;
+            tbody.innerHTML += row;
+        }
+
+        document.getElementById('downloadBtn').addEventListener('click', function () {
+            let unitStr = pixelPerUnit > 0 ? document.getElementById('lengthUnitSelect').value : 'px';
+            let csv = `Time(s),X(${unitStr}),Y(${unitStr})\n`;
+            trackingData.forEach(row => {
+                csv += `${row.t},${row.x},${row.y}\n`;
+            });
+
+            let blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' });
+            let url = URL.createObjectURL(blob);
+            let a = document.createElement('a');
+            a.href = url;
+            a.download = 'ball_motion_data.csv';
+            a.click();
+        });
+
+        // 초기화 버튼 이벤트 (페이지 새로고침 없이 데이터 및 화면 상태만 클리어)
+        document.getElementById('resetBtn').addEventListener('click', function () {
+            isTracking = false;
+            if (templateMat) {
+                templateMat.delete();
+                templateMat = null;
+            }
+            trackingData = [];
+            isSettingBox = false;
+            isDragging = false;
+
+            document.getElementById('dataTableBody').innerHTML = `<tr><td colspan="3" class="p-4 text-center text-slate-400">데이터가 없습니다.</td></tr>`;
+
+            document.getElementById('startBtn').setAttribute('disabled', 'true');
+            document.getElementById('downloadBtn').setAttribute('disabled', 'true');
+            // document.getElementById('scaleStatusText').innerText = "기준자 미설정 (선택사항)";
+            // document.getElementById('scaleStatusText').className = "text-xs text-amber-600 font-bold";
+
+            if (pixelPerUnit > 0) {
+                let realVal = parseFloat(document.getElementById('realLengthInput').value);
+                let unitStr = document.getElementById('lengthUnitSelect').value;
+                // 기준자가 유지되어 있음을 안내
+                document.getElementById('scaleStatusText').innerText = `기준자 설정 유지됨 (${pixelPerUnit.toFixed(1)}px/${realVal}${unitStr})`;
+                document.getElementById('scaleStatusText').className = "text-xs text-emerald-600 font-bold";
+                document.getElementById('guideText').innerText = "초기화되었습니다. 기준자는 유지되어 있으니 공의 위치를 다시 클릭해 주세요.";
+            } else {
+                document.getElementById('scaleStatusText').innerText = "기준자 미설정 (선택사항)";
+                document.getElementById('scaleStatusText').className = "text-xs text-amber-600 font-bold";
+                document.getElementById('guideText').innerText = "초기화되었습니다. 공의 위치를 다시 클릭해 주세요.";
+            }
+
+            if (video.src) {
+                video.currentTime = parseInt(document.getElementById('startTimeRange').value) / getUserFps();
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                // 만약 기준자가 이미 설정된 상태였다면 초기화면에서도 기준자 선을 다시 그려주어 시각적으로 확인시켜 줍니다.
+                if (pixelPerUnit > 0 && scalePoints.length === 2) {
+                    ctx.strokeStyle = 'blue';
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.moveTo(scalePoints[0].x, scalePoints[0].y);
+                    ctx.lineTo(scalePoints[1].x, scalePoints[1].y);
+                    ctx.stroke();
+                }
+            } else {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                document.getElementById('guideText').innerText = "영상을 업로드한 뒤 공을 마우스로 클릭해 지정해주세요.";
+            }
+        });
+    </script>
+</body>
+
+</html>
