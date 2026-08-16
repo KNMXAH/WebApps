@@ -244,32 +244,22 @@
 
 
         async function initFFmpeg() {
-            if (ffmpeg) return;
-            
-            ffmpeg = new FFmpeg();
-            
-            // 로그 및 프로그레스 바 이벤트 리스너
-            ffmpeg.on("log", ({ message }) => { console.log(message); });
-            ffmpeg.on("progress", ({ progress }) => {
-                const percent = Math.max(0, Math.min(100, Math.round(progress * 100)));
-                const progressBar = document.getElementById('ffmpeg-progress-bar');
-                const percentText = document.getElementById('ffmpeg-progress-percent');
-                if (progressBar && percentText) {
-                    progressBar.style.width = percent + '%';
-                    percentText.innerText = percent + '%';
-                }
-            });
+            if (ffmpeg && ffmpeg.loaded) return ffmpeg;
 
-            // 1. @ffmpeg/util에서 제공하는 toBlobURL 함수를 꺼내옵니다.
-            const { toBlobURL } = FFmpegWASM; // HTML로 스크립트를 불러왔을 때 보통 이 전역 객체 안에 포함됩니다.
+            ffmpeg = new FFmpegWASM.FFmpeg();
 
             const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
 
-            // 2. 외부 CDN 파일을 브라우저가 안전하게 읽을 수 있는 Blob URL로 변환(포장)하여 로드합니다.
+            // @ffmpeg/util은 브라우저에서 보통 FFmpegUtil 이라는 전역 객체로 들어옵니다.
+            const { toBlobURL } = FFmpegUtil; 
+
             await ffmpeg.load({
                 coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
                 wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
             });
+
+            console.log("FFmpeg 로딩 완료!");
+            return ffmpeg;
         }
 
         // 파일 업로드 핸들러 (FFmpeg를 통해 확장자 무관하게 표준 MP4로 변환)
