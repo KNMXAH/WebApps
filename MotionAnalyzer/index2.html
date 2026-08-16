@@ -8,7 +8,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <!-- FFmpeg.wasm 및 mp4box.js CDN 로드 -->
     <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+    <!-- <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js"></script> -->
     <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/mp4box.js/0.5.2/mp4box.all.min.js"></script> -->
     <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.min.js"></script>
     <style>
@@ -242,20 +242,14 @@
         const { FFmpeg } = FFmpegWASM;
         let ffmpeg = null;
 
-        // 👇 FFmpeg.wasm 관련 유틸 함수 전역 선언부 추가
-        const { toBlobURL } = FFmpegUtil; // 또는 window.FFmpegUtil 에서 가져오기
 
         async function initFFmpeg() {
             if (ffmpeg) return;
             
-            // 혹시 객체 형태로 들어있다면 아래처럼 안전하게 할당할 수 있습니다.
-            const util = window.FFmpegUtil || FFmpegUtil;
-            const fetchFile = util.fetchFile;
-            const toBlobURL = util.toBlobURL;
-
             ffmpeg = new FFmpeg();
-            ffmpeg.on("log", ({ message }) => { console.log(message); });
             
+            // 로그 및 프로그레스 바 이벤트 리스너
+            ffmpeg.on("log", ({ message }) => { console.log(message); });
             ffmpeg.on("progress", ({ progress }) => {
                 const percent = Math.max(0, Math.min(100, Math.round(progress * 100)));
                 const progressBar = document.getElementById('ffmpeg-progress-bar');
@@ -266,15 +260,11 @@
                 }
             });
 
-            // await ffmpeg.load({
-            //     coreURL: "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js",
-            //     wasmURL: "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm"
-            // });
-
+            // Vercel에서는 아래와 같이 직관적으로 CDN 주소를 지정하는 방식이 가장 깔끔합니다.
             const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
             await ffmpeg.load({
-                coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-                wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+                coreURL: `${baseURL}/ffmpeg-core.js`,
+                wasmURL: `${baseURL}/ffmpeg-core.wasm`,
             });
         }
 
