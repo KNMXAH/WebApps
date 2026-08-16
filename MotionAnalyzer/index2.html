@@ -8,7 +8,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <!-- FFmpeg.wasm 및 mp4box.js CDN 로드 -->
     <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
-    <!-- <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js"></script> -->
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
     <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/mp4box.js/0.5.2/mp4box.all.min.js"></script> -->
     <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.min.js"></script>
     <style>
@@ -260,11 +260,15 @@
                 }
             });
 
-            // Vercel에서는 아래와 같이 직관적으로 CDN 주소를 지정하는 방식이 가장 깔끔합니다.
+            // 1. @ffmpeg/util에서 제공하는 toBlobURL 함수를 꺼내옵니다.
+            const { toBlobURL } = FFmpegWASM; // HTML로 스크립트를 불러왔을 때 보통 이 전역 객체 안에 포함됩니다.
+
             const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+
+            // 2. 외부 CDN 파일을 브라우저가 안전하게 읽을 수 있는 Blob URL로 변환(포장)하여 로드합니다.
             await ffmpeg.load({
-                coreURL: `${baseURL}/ffmpeg-core.js`,
-                wasmURL: `${baseURL}/ffmpeg-core.wasm`,
+                coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+                wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
             });
         }
 
