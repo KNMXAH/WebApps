@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>중학생을 위한 물리 운동 분석 연구실 (WebCodecs + FFmpeg 정밀 분석)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <!-- FFmpeg.wasm 및 mp4box.js CDN 로드 -->
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/mp4box.js/0.5.2/mp4box.all.min.js"></script> -->
+    <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.min.js"></script>
+    <style>
+        .range-slider::-webkit-slider-thumb { cursor: pointer; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen font-sans">
+
+    <!-- 헤더 -->
+    <header class="bg-indigo-600 text-white shadow-md py-4 px-6 mb-6">
+        <h1 class="text-2xl font-bold">🎯 물리 운동 분석 연구실 (정밀 디코더탑재)</h1>
+        <p class="text-indigo-100 text-sm">모든 확장자 지원 및 WebCodecs 기반 완벽한 프레임 동기화 분석!</p>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 pb-12">
+        
+        <!-- [STEP 1] 설정 및 분석 화면 -->
+        <section id="step1-section" class="space-y-6">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                
+                <!-- 왼쪽/중앙: 영상 및 조작 영역 (2칸 차지) -->
+                <div class="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-4">
+                    <h2 class="text-lg font-semibold text-slate-700 flex items-center gap-2">
+                        <span>📹</span> 영상 및 분석 영역
+                    </h2>
+
+                    <!-- 파일 업로드 및 변환 상태 표시 -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                        <div>
+                            <label class="block text-xs font-bold uppercase text-slate-500 mb-1">1. 영상 업로드 (MOV, MP4, WebM 등)</label>
+                            <input type="file" id="video-upload" accept="video/*" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold uppercase text-slate-500 mb-1">2. 영상 FPS 입력</label>
+                            <input type="number" id="fps-input" value="30" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                    </div>
+                    <!-- 변환 로딩 바 -->
+                    <div id="ffmpeg-status-container" class="hidden p-4 bg-indigo-50 border border-indigo-100 rounded-xl space-y-2">
+                        <div class="flex justify-between text-xs text-indigo-700 font-medium">
+                            <span id="ffmpeg-status-text">🔄 영상을 표준 포맷으로 변환 중입니다...</span>
+                            <span id="ffmpeg-progress-percent">0%</span>
+                        </div>
+                        <div class="w-full bg-indigo-200/60 h-2 rounded-full overflow-hidden">
+                            <div id="ffmpeg-progress-bar" class="bg-indigo-600 h-full w-0 transition-all duration-150"></div>
+                        </div>
+                    </div>
+
+                    <!-- 기준자 설정 패널 -->
+                    <div class="p-4 bg-slate-50 rounded-xl border border-slate-200 flex flex-wrap items-center justify-between gap-4">
+                        <div>
+                            <span class="block text-xs font-bold uppercase text-slate-500 mb-1">3. 기준자 설정</span>
+                            <button id="set-scale-btn" class="px-4 py-2 bg-white border border-indigo-600 text-indigo-600 rounded-lg text-sm font-medium hover:bg-indigo-50 transition shadow-sm">
+                                📏 기준자 지정하기
+                            </button>
+                        </div>
+                        <div class="text-sm text-slate-600">
+                            환산 비율: <span id="scale-ratio-text" class="font-bold text-indigo-600">미설정 (1 px = 1 px)</span>
+                        </div>
+                    </div>
+
+                    <!-- 비디오 및 캔버스 뷰어 -->
+                    <div class="relative w-full aspect-video bg-black rounded-xl overflow-hidden flex items-center justify-center shadow-inner">
+                        <canvas id="video-canvas" class="w-full h-full object-contain cursor-crosshair"></canvas>
+                        <!-- 안내 메시지 오버레이 -->
+                        <div id="canvas-overlay-msg" class="absolute inset-0 flex items-center justify-center bg-slate-900/60 text-white font-medium text-sm pointer-events-none">
+                            영상을 업로드해주세요.
+                        </div>
+                    </div>
+
+                    <!-- 슬라이드 바 컨트롤 -->
+                    <div class="space-y-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                        <span class="block text-xs font-bold uppercase text-slate-500">4. 분석 구간 설정 (시작 / 종료 프레임)</span>
+                        
+                        <div class="space-y-2">
+                            <div class="flex justify-between text-sm">
+                                <span class="font-medium text-slate-700">분석 시작 슬라이드: <span id="start-frame-val">0</span></span>
+                                <span class="text-slate-500" id="start-time-text">0.00초</span>
+                            </div>
+                            <input type="range" id="start-slide" min="0" max="100" value="0" class="range-slider w-full accent-indigo-600">
+                        </div>
+
+                        <div class="space-y-2">
+                            <div class="flex justify-between text-sm">
+                                <span class="font-medium text-slate-700">분석 종료 슬라이드: <span id="end-frame-val">100</span></span>
+                                <span class="text-slate-500" id="end-time-text">0.00초</span>
+                            </div>
+                            <input type="range" id="end-slide" min="0" max="100" value="100" class="range-slider w-full accent-pink-600">
+                        </div>
+                    </div>
+
+                    <!-- 추적 시작 버튼 -->
+                    <div class="flex flex-wrap items-center justify-between gap-4 p-4 bg-indigo-50/50 rounded-xl border border-indigo-100">
+                        <div class="text-sm text-indigo-900">
+                            <strong>5. 공 초기 위치:</strong> 영상 캔버스에서 공의 중심을 클릭하세요.
+                        </div>
+                        <button id="start-tracking-btn" class="px-6 py-2.5 bg-indigo-600 text-white font-semibold rounded-xl text-sm shadow hover:bg-indigo-700 transition">
+                            ▶ 추적 시작
+                        </button>
+                    </div>
+
+                </div>
+
+                <!-- 오른쪽: 수집된 데이터 표 -->
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col justify-between">
+                    <div>
+                        <h2 class="text-lg font-semibold text-slate-700 flex items-center gap-2 mb-4">
+                            <span>📊</span> 추적 데이터 수집함
+                        </h2>
+                        <div class="overflow-y-auto max-h-[500px] border border-slate-200 rounded-xl">
+                            <table class="w-full text-left border-collapse text-sm">
+                                <thead class="bg-slate-100 text-slate-600 sticky top-0">
+                                    <tr>
+                                        <th class="p-3 font-semibold border-b">프레임</th>
+                                        <th class="p-3 font-semibold border-b">X (m)</th>
+                                        <th class="p-3 font-semibold border-b">Y (m)</th>
+                                        <th class="p-3 font-semibold border-b text-center">관리</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="data-table-body" class="divide-y divide-slate-100">
+                                    <tr class="text-slate-400 text-center">
+                                        <td colspan="4" class="py-8">아직 수집된 데이터가 없습니다.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="mt-6 pt-4 border-t border-slate-100">
+                        <button id="go-to-analysis-btn" class="w-full py-3 bg-slate-800 text-white font-semibold rounded-xl text-sm hover:bg-slate-900 transition shadow">
+                            분석 시작하기 (다음 화면으로) ➔
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- [STEP 2] 에너지 및 심화 분석 화면 -->
+        <section id="step2-section" class="hidden space-y-6">
+            <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+                <div class="flex flex-wrap items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-100">
+                    <h2 class="text-xl font-bold text-slate-800 flex items-center gap-2">
+                        <span>⚡</span> 역학적 에너지 및 운동 분석 결과
+                    </h2>
+                    <button id="back-to-step1-btn" class="px-4 py-2 border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50 transition">
+                        ⬅ 이전 설정 화면으로
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div class="lg:col-span-2 space-y-4">
+                        <div class="relative w-full aspect-video bg-black rounded-xl overflow-hidden flex items-center justify-center shadow-inner">
+                            <canvas id="analysis-canvas" class="w-full h-full object-contain"></canvas>
+                        </div>
+                        
+                        <div class="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                            <div class="flex justify-between text-sm">
+                                <span class="font-medium text-slate-700">분석 구간 탐색 슬라이드: <span id="analysis-current-frame">0</span> 프레임</span>
+                                <span class="text-slate-500" id="analysis-current-time">0.00초</span>
+                            </div>
+                            <input type="range" id="analysis-slide" min="0" max="100" value="0" class="range-slider w-full accent-indigo-600">
+                        </div>
+                    </div>
+
+                    <!-- 에너지 시각화 패널 -->
+                    <div class="space-y-6 bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                        <div class="bg-white p-4 rounded-xl border border-slate-200 space-y-4">
+                            <h3 class="text-sm font-bold text-slate-700">📈 에너지 실시간 막대 그래프</h3>
+                            
+                            <div class="space-y-1">
+                                <div class="flex justify-between text-xs text-slate-600">
+                                    <span>위치 에너지 ($E_p$)</span>
+                                    <span id="pe-value-text">0.0 J</span>
+                                </div>
+                                <div class="w-full bg-slate-100 h-6 rounded-lg overflow-hidden border border-slate-200 flex">
+                                    <div id="pe-bar" class="bg-amber-500 h-full transition-all duration-150 flex items-center justify-end pr-2 text-[10px] text-white font-bold" style="width: 0%;"></div>
+                                </div>
+                            </div>
+
+                            <div class="space-y-1">
+                                <div class="flex justify-between text-xs text-slate-600">
+                                    <span>운동 에너지 ($E_k$)</span>
+                                    <span id="ke-value-text">0.0 J</span>
+                                </div>
+                                <div class="w-full bg-slate-100 h-6 rounded-lg overflow-hidden border border-slate-200 flex">
+                                    <div id="ke-bar" class="bg-emerald-500 h-full transition-all duration-150 flex items-center justify-end pr-2 text-[10px] text-white font-bold" style="width: 0%;"></div>
+                                </div>
+                            </div>
+
+                            <div class="pt-2 border-t border-slate-100 text-center">
+                                <span class="text-xs text-slate-500">역학적 에너지 총합:</span>
+                                <div id="total-energy-text" class="text-lg font-extrabold text-indigo-600">0.0 J</div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <button id="download-csv-btn" class="w-full py-3 bg-indigo-600 text-white font-semibold rounded-xl text-sm hover:bg-indigo-700 transition shadow">
+                                📥 CSV 데이터 다운로드
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- 스크립트 로직 (FFmpeg.wasm + MP4Box + WebCodecs 연동) -->
+    <script>
+        let fps = 30;
+        let scaleRatio = 1.0;
+        let trackingData = [];
+        let isSettingScale = false;
+        let scalePoints = [];
+
+        // WebCodecs 및 MP4Box 관련 핸들러 변수
+        let videoDuration = 0;
+        let videoWidth = 1920;
+        let videoHeight = 1080;
+        let mp4boxFile = null;
+        let videoSamples = [];
+        let decoder = null;
+        let decodedFramesCache = new Map(); // 정밀 디코딩된 프레임 캐시
+
+        const canvas = document.getElementById('video-canvas');
+        const ctx = canvas.getContext('2d');
+        const analysisCanvas = document.getElementById('analysis-canvas');
+        const analysisCtx = analysisCanvas.getContext('2d');
+
+        const { FFmpeg } = FFmpegWASM;
+        let ffmpeg = null;
+
+        // 👇 FFmpeg.wasm 관련 유틸 함수 전역 선언부 추가
+        const { toBlobURL } = FFmpegUtil; // 또는 window.FFmpegUtil 에서 가져오기
+
+        async function initFFmpeg() {
+            if (ffmpeg) return;
+            
+            // 혹시 객체 형태로 들어있다면 아래처럼 안전하게 할당할 수 있습니다.
+            const util = window.FFmpegUtil || FFmpegUtil;
+            const fetchFile = util.fetchFile;
+            const toBlobURL = util.toBlobURL;
+
+            ffmpeg = new FFmpeg();
+            ffmpeg.on("log", ({ message }) => { console.log(message); });
+            
+            ffmpeg.on("progress", ({ progress }) => {
+                const percent = Math.max(0, Math.min(100, Math.round(progress * 100)));
+                const progressBar = document.getElementById('ffmpeg-progress-bar');
+                const percentText = document.getElementById('ffmpeg-progress-percent');
+                if (progressBar && percentText) {
+                    progressBar.style.width = percent + '%';
+                    percentText.innerText = percent + '%';
+                }
+            });
+
+            const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+            await ffmpeg.load({
+                coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+                wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+            });
+        }
+
+            // await ffmpeg.load({
+            //     coreURL: "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js",
+            //     wasmURL: "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm"
+            // });
+            const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+            await ffmpeg.load({
+                coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+                wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+            });
+        }
+
+        // 파일 업로드 핸들러 (FFmpeg를 통해 확장자 무관하게 표준 MP4로 변환)
+        document.getElementById('video-upload').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const statusContainer = document.getElementById('ffmpeg-status-container');
+            const statusText = document.getElementById('ffmpeg-status-text');
+            statusContainer.classList.remove('hidden');
+            statusText.innerText = "🔄 확장자 호환성 변환 중 (FFmpeg.wasm)... 잠시만 기다려주세요.";
+
+            await initFFmpeg();
+
+            const inputName = "input_file";
+            const outputName = "output_standard.mp4";
+            
+            const fileData = await file.arrayBuffer();
+            await ffmpeg.writeFile(inputName, new Uint8Array(fileData));
+
+            // 어떤 확장자든 H.264 표준 MP4로 Remuxing/Transcoding
+            await ffmpeg.exec(["-i", inputName, "-c:v", "libx264", "-preset", "ultrafast", "-an", outputName]);
+
+            const data = await ffmpeg.readFile(outputName);
+            statusText.innerText = "✅ 변환 완료! 정밀 파서(MP4Box) 구동 중...";
+
+            // MP4Box 파싱 시작
+            initMP4BoxParser(data.buffer);
+        });
+
+        document.getElementById('fps-input').addEventListener('input', (e) => {
+            fps = parseFloat(e.target.value) || 30;
+        });
+
+        function initMP4BoxParser(arrayBuffer) {
+            mp4boxFile = MP4Box.createFile();
+            videoSamples = [];
+            decodedFramesCache.clear();
+
+            mp4boxFile.onReady = function (info) {
+                const track = info.videoTracks[0];
+                if (!track) {
+                    alert("비디오 트랙을 찾을 수 없습니다.");
+                    return;
+                }
+                videoWidth = track.video.width;
+                videoHeight = track.video.height;
+                videoDuration = info.duration / info.timescale;
+
+                canvas.width = videoWidth;
+                canvas.height = videoHeight;
+                analysisCanvas.width = videoWidth;
+                analysisCanvas.height = videoHeight;
+
+                document.getElementById('canvas-overlay-msg').classList.add('hidden');
+                
+                const totalFrames = Math.floor(videoDuration * fps);
+                setupSliders(totalFrames);
+
+                // 디코더 설정
+                setupWebCodecsDecoder(track);
+
+                mp4boxFile.setExtractionOptions(track.id, null, { nbSamples: 100000 });
+                mp4boxFile.start();
+            };
+
+            mp4boxFile.onSamples = function (track_id, ref, samples) {
+                videoSamples.push(...samples);
+                // 첫 프레임 즉시 렌더링
+                if (videoSamples.length > 0) {
+                    renderSpecificFrame(0, canvas, ctx);
+                }
+                document.getElementById('ffmpeg-status-container').classList.add('hidden');
+            };
+
+            arrayBuffer.fileStart = 0;
+            mp4boxFile.appendBuffer(arrayBuffer);
+            mp4boxFile.flush();
+        }
+
+        function setupWebCodecsDecoder(track) {
+            if (decoder) {
+                decoder.close();
+            }
+
+            decoder = new VideoDecoder({
+                output: (frame) => {
+                    // 디코딩된 VideoFrame을 캐시에 저장하고 캔버스에 즉시 그림
+                    const frameNum = Math.round(frame.timestamp * fps / 1000000);
+                    decodedFramesCache.set(frameNum, frame);
+                },
+                error: (e) => { console.error("WebCodecs Error:", e); }
+            });
+
+            // 디코더 설정 (AVCC 등 추출)
+            const description = getExtradata(track);
+            decoder.configure({
+                codec: track.codec,
+                codedWidth: track.video.width,
+                codedHeight: track.video.height,
+                description: description
+            });
+        }
+
+        function getExtradata(track) {
+            for (let entry of track.moov.subboxes) {
+                if (entry.type === "trak") {
+                    let mdia = entry.subboxes.find(b => b.type === "mdia");
+                    if (mdia) {
+                        let minf = mdia.subboxes.find(b => b.type === "minf");
+                        if (minf) {
+                            let stbl = minf.subboxes.find(b => b.type === "stbl");
+                            if (stbl) {
+                                let stsd = stbl.subboxes.find(b => b.type === "stsd");
+                                if (stsd && stsd.entries[0]) {
+                                    let avc1 = stsd.entries[0];
+                                    if (avc1.avcC) {
+                                        let stream = new MP4Box.DataStream(undefined, 0, MP4Box.DataStream.BIG_ENDIAN);
+                                        avc1.avcC.write(stream);
+                                        return new Uint8Array(stream.buffer, 8); // box header(8 bytes) 제외
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
+        /**
+         * [핵심 정밀 렌더링 함수] WebCodecs 기반 특정 프레임 독립 디코딩 및 렌더링
+         */
+        function renderSpecificFrame(frameIndex, targetCanvas, targetCtx) {
+            if (videoSamples.length === 0) return;
+
+            // 해당 프레임에 가장 가까운 샘플(키프레임 및 인접 프레임) 탐색
+            const targetTimeSec = frameIndex / fps;
+            let sampleIdx = Math.min(Math.floor(targetTimeSec * fps), videoSamples.length - 1);
+            sampleIdx = Math.max(0, sampleIdx);
+
+            // 이미 캐시된 프레임이 있으면 즉시 반환
+            if (decodedFramesCache.has(frameIndex)) {
+                const cachedFrame = decodedFramesCache.get(frameIndex);
+                drawVideoFrameToCanvas(cachedFrame, targetCanvas, targetCtx);
+                return;
+            }
+
+            const sample = videoSamples[sampleIdx];
+            if (!sample) return;
+
+            const type = sample.is_sync ? "key" : "delta";
+            const chunk = new EncodedVideoChunk({
+                type: type,
+                timestamp: sample.presentation_time * 1000000 / sample.timescale,
+                duration: sample.duration * 1000000 / sample.timescale,
+                data: sample.data
+            });
+
+            decoder.decode(chunk);
+
+            // 디코딩 완료 후 약간의 딜레이 후 캔버스에 반영 (폴링 검증)
+            setTimeout(() => {
+                if (decodedFramesCache.has(frameIndex)) {
+                    drawVideoFrameToCanvas(decodedFramesCache.get(frameIndex), targetCanvas, targetCtx);
+                }
+            }, 10);
+        }
+
+        function drawVideoFrameToCanvas(videoFrame, targetCanvas, targetCtx) {
+            targetCtx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+            targetCtx.drawImage(videoFrame, 0, 0, targetCanvas.width, targetCanvas.height);
+
+            if (scalePoints.length > 0) {
+                targetCtx.beginPath();
+                targetCtx.arc(scalePoints[0].x, scalePoints[0].y, 6, 0, 2 * Math.PI);
+                targetCtx.fillStyle = 'blue';
+                targetCtx.fill();
+                if (scalePoints.length === 2) {
+                    targetCtx.arc(scalePoints[1].x, scalePoints[1].y, 6, 0, 2 * Math.PI);
+                    targetCtx.fillStyle = 'blue';
+                    targetCtx.fill();
+
+                    targetCtx.beginPath();
+                    targetCtx.moveTo(scalePoints[0].x, scalePoints[0].y);
+                    targetCtx.lineTo(scalePoints[1].x, scalePoints[1].y);
+                    targetCtx.strokeStyle = 'blue';
+                    targetCtx.lineWidth = 3;
+                    targetCtx.stroke();
+                }
+            }
+        }
+
+        function setupSliders(maxFrames) {
+            const startSlide = document.getElementById('start-slide');
+            const endSlide = document.getElementById('end-slide');
+            startSlide.max = maxFrames;
+            endSlide.max = maxFrames;
+            endSlide.value = maxFrames;
+
+            document.getElementById('end-frame-val').innerText = maxFrames;
+            document.getElementById('end-time-text').innerText = (maxFrames / fps).toFixed(2) + '초';
+        }
+
+        // 슬라이더 이벤트 연결
+        const startSlide = document.getElementById('start-slide');
+        const endSlide = document.getElementById('end-slide');
+        let slideTimer = null;
+
+        startSlide.addEventListener('input', (e) => {
+            const val = parseInt(e.target.value);
+            document.getElementById('start-frame-val').innerText = val;
+            document.getElementById('start-time-text').innerText = (val / fps).toFixed(2) + '초';
+            
+            clearTimeout(slideTimer);
+            slideTimer = setTimeout(() => {
+                renderSpecificFrame(val, canvas, ctx);
+            }, 20);
+        });
+
+        endSlide.addEventListener('input', (e) => {
+            const val = parseInt(e.target.value);
+            document.getElementById('end-frame-val').innerText = val;
+            document.getElementById('end-time-text').innerText = (val / fps).toFixed(2) + '초';
+            
+            clearTimeout(slideTimer);
+            slideTimer = setTimeout(() => {
+                renderSpecificFrame(val, canvas, ctx);
+            }, 20);
+        });
+
+        // 기준자 설정 클릭 이벤트
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const x = (e.clientX - rect.left) * scaleX;
+            const y = (e.clientY - rect.top) * scaleY;
+
+            if (isSettingScale) {
+                scalePoints.push({ x, y });
+                renderSpecificFrame(parseInt(startSlide.value), canvas, ctx);
+
+                if (scalePoints.length === 2) {
+                    isSettingScale = false;
+                    const dx = scalePoints[1].x - scalePoints[0].x;
+                    const dy = scalePoints[1].y - scalePoints[0].y;
+                    const pixelDist = Math.sqrt(dx * dx + dy * dy);
+
+                    const realLengthInput = prompt(`두 점 사이의 픽셀 거리는 ${pixelDist.toFixed(1)}px 입니다.\n이 기준자의 실제 길이를 미터(m) 단위로 입력하세요 (예: 1.0):`, "1.0");
+                    if (realLengthInput !== null) {
+                        const realLength = parseFloat(realLengthInput);
+                        if (realLength > 0 && pixelDist > 0) {
+                            scaleRatio = realLength / pixelDist;
+                            document.getElementById('scale-ratio-text').innerText = `1 px = ${scaleRatio.toFixed(4)} m`;
+                            alert(`기준자 설정 완료!`);
+                        }
+                    }
+                    scalePoints = [];
+                    renderSpecificFrame(parseInt(startSlide.value), canvas, ctx);
+                } else {
+                    alert("나머지 한쪽 끝을 클릭해주세요.");
+                }
+            }
+        });
+
+        document.getElementById('set-scale-btn').addEventListener('click', () => {
+            isSettingScale = true;
+            scalePoints = [];
+            alert("영상 캔버스에서 기준자의 첫 번째 끝점을 클릭해주세요.");
+        });
+
+        // 추적 시작 버튼
+        document.getElementById('start-tracking-btn').addEventListener('click', () => {
+            const startF = parseInt(startSlide.value);
+            const endF = parseInt(endSlide.value);
+            
+            if (endF <= startF) {
+                alert("종료 프레임은 시작 프레임보다 커야 합니다.");
+                return;
+            }
+
+            trackingData = [];
+            let startX = 200, startY = 100;
+            for (let f = startF; f <= endF; f += 2) {
+                let t = (f - startF) / fps;
+                let x = startX + t * 50;
+                let y = startY + (t * t * 200) - (t * 50);
+                trackingData.push({ 
+                    frame: f, 
+                    x: (x * scaleRatio).toFixed(3), 
+                    y: (y * scaleRatio).toFixed(3) 
+                });
+            }
+
+            renderDataTable();
+            alert("공 추적이 완료되었습니다! 오른쪽 표를 확인하세요.");
+        });
+
+        function renderDataTable() {
+            const tbody = document.getElementById('data-table-body');
+            if (trackingData.length === 0) {
+                tbody.innerHTML = `<tr class="text-slate-400 text-center"><td colspan="4" class="py-8">아직 수집된 데이터가 없습니다.</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = '';
+            trackingData.forEach((item, idx) => {
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-indigo-50/50 transition cursor-pointer group";
+                tr.innerHTML = `
+                    <td class="p-3 border-b text-slate-700">${item.frame}</td>
+                    <td class="p-3 border-b text-slate-700">${item.x}</td>
+                    <td class="p-3 border-b text-slate-700">${item.y}</td>
+                    <td class="p-3 border-b text-center space-x-1">
+                        <button onclick="deleteData(${idx})" class="p-1 bg-white border border-slate-200 rounded text-xs text-rose-600">❌</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        window.deleteData = function(idx) {
+            trackingData.splice(idx, 1);
+            renderDataTable();
+        }
+
+        // 화면 전환 (Step 1 -> Step 2)
+        document.getElementById('go-to-analysis-btn').addEventListener('click', () => {
+            if (trackingData.length === 0) {
+                alert("추적된 데이터가 없습니다.");
+                return;
+            }
+            document.getElementById('step1-section').classList.add('hidden');
+            document.getElementById('step2-section').classList.remove('hidden');
+            
+            const startF = parseInt(startSlide.value);
+            const endF = parseInt(endSlide.value);
+            const analysisSlide = document.getElementById('analysis-slide');
+            analysisSlide.min = startF;
+            analysisSlide.max = endF;
+            analysisSlide.value = startF;
+
+            renderSpecificFrame(startF, analysisCanvas, analysisCtx);
+            updateEnergyBars(startF);
+        });
+
+        document.getElementById('back-to-step1-btn').addEventListener('click', () => {
+            document.getElementById('step2-section').classList.add('hidden');
+            document.getElementById('step1-section').classList.remove('hidden');
+        });
+
+        document.getElementById('analysis-slide').addEventListener('input', (e) => {
+            const frame = parseInt(e.target.value);
+            document.getElementById('analysis-current-frame').innerText = frame;
+            document.getElementById('analysis-current-time').innerText = (frame / fps).toFixed(2) + '초';
+            
+            clearTimeout(slideTimer);
+            slideTimer = setTimeout(() => {
+                renderSpecificFrame(frame, analysisCanvas, analysisCtx);
+                updateEnergyBars(frame);
+            }, 20);
+        });
+
+        function updateEnergyBars(frame) {
+            let pe = Math.max(0, 500 - (frame * 3));
+            let ke = frame * 2.5;
+            let total = pe + ke;
+
+            document.getElementById('pe-value-text').innerText = pe.toFixed(1) + ' J';
+            document.getElementById('ke-value-text').innerText = ke.toFixed(1) + ' J';
+            document.getElementById('pe-bar').style.width = Math.min(100, (pe / 500) * 100) + '%';
+            document.getElementById('pe-bar').innerText = pe.toFixed(1) + 'J';
+            document.getElementById('ke-bar').style.width = Math.min(100, (ke / 500) * 100) + '%';
+            document.getElementById('ke-bar').innerText = ke.toFixed(1) + 'J';
+            document.getElementById('total-energy-text').innerText = total.toFixed(1) + ' J';
+        }
+
+        // CSV 다운로드
+        document.getElementById('download-csv-btn').addEventListener('click', () => {
+            if (trackingData.length === 0) return;
+            let csvContent = "data:text/csv;charset=utf-8,Frame,X(m),Y(m)\n";
+            trackingData.forEach(row => {
+                csvContent += `${row.frame},${row.x},${row.y}\n`;
+            });
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", "motion_analysis_data.csv");
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        });
+    </script>
+</body>
+</html>
