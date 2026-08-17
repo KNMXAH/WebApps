@@ -7,12 +7,13 @@
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 
-    <!-- FFmpeg.wasm 및 mp4box.js CDN 로드 -->
-    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
-    <!-- FFmpeg 다운그레이드 -->
-    <!-- <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script> -->
+    <!-- FFmpeg.wasm 0.12.10 CDN 로드 -->
+    <!-- <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js"></script> -->
+    <!-- FFmpeg 0.11.6  -->
+    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
     
+    <!-- mp4box.js CDN 로드  -->
     <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/mp4box.js/0.5.2/mp4box.all.min.js"></script> -->
     <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.min.js"></script>
     <style>
@@ -243,24 +244,32 @@
         const analysisCanvas = document.getElementById('analysis-canvas');
         const analysisCtx = analysisCanvas.getContext('2d');
 
-        let ffmpeg = null;
+        // For FFmpeg 0.11.6
+        const { createFFmpeg, fetchFile } = FFmpeg;
+        const ffmpeg = createFFmpeg({ log: true });
 
         async function initFFmpeg() {
-            if (ffmpeg && ffmpeg.loaded) return ffmpeg;
-
-            ffmpeg = new FFmpegWASM.FFmpeg();
-
-            const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
-            const { toBlobURL } = FFmpegUtil;
-
-            await ffmpeg.load({
-                coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-                wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-            });
-
-            console.log("FFmpeg 최신 버전 로딩 완료!");
+            if (!ffmpeg.isLoaded()) {
+                await ffmpeg.load();
+                console.log("FFmpeg v0.11.6 로딩 완료!");
+            }
             return ffmpeg;
         }
+
+        // for ffmpeg 0.12.10
+        // let ffmpeg = null;
+        // async function initFFmpeg() {
+        //     if (ffmpeg && ffmpeg.loaded) return ffmpeg;
+        //     ffmpeg = new FFmpegWASM.FFmpeg();
+        //     const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+        //     const { toBlobURL } = FFmpegUtil;
+        //     await ffmpeg.load({
+        //         coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+        //         wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+        //     });
+        //     console.log("FFmpeg 최신 버전 로딩 완료!");
+        //     return ffmpeg;
+        // }
 
         // 파일 업로드 핸들러 (FFmpeg를 통해 확장자 무관하게 표준 MP4로 변환)
         document.getElementById('video-upload').addEventListener('change', async (e) => {
