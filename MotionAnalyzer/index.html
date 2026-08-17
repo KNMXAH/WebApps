@@ -286,13 +286,24 @@
             const inputName = "input_file";
             const outputName = "output_standard.mp4";
             
+            // 파일 쓰기
             const fileData = await file.arrayBuffer();
-            await ffmpeg.writeFile(inputName, new Uint8Array(fileData));
+            // for 0.11.6
+            ffmpeg.FS('writeFile', inputName, new Uint8Array(fileData));
+            // for 0.12.10
+            // await ffmpeg.writeFile(inputName, new Uint8Array(fileData));
 
             // 어떤 확장자든 H.264 표준 MP4로 Remuxing/Transcoding
-            await ffmpeg.exec(["-i", inputName, "-c:v", "libx264", "-preset", "ultrafast", "-an", outputName]);
+            // for 0.11.6
+            await ffmpeg.run("-i", inputName, "-c:v", "libx264", "-preset", "ultrafast", "-an", outputName);
+            // for 0.12.10
+            // await ffmpeg.exec(["-i", inputName, "-c:v", "libx264", "-preset", "ultrafast", "-an", outputName]);
 
-            const data = await ffmpeg.readFile(outputName);
+            // 파일 읽기
+            // for 0.11.6
+            const data = ffmpeg.FS('readFile', outputName);
+            // for 0.12.10
+            // const data = await ffmpeg.readFile(outputName);
             statusText.innerText = "✅ 변환 완료! 정밀 파서(MP4Box) 구동 중...";
 
             // MP4Box 파싱 시작
