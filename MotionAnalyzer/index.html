@@ -385,27 +385,20 @@
         }
 
         function getExtradata(track) {
-            for (let entry of track.moov.subboxes) {
-                if (entry.type === "trak") {
-                    let mdia = entry.subboxes.find(b => b.type === "mdia");
-                    if (mdia) {
-                        let minf = mdia.subboxes.find(b => b.type === "minf");
-                        if (minf) {
-                            let stbl = minf.subboxes.find(b => b.type === "stbl");
-                            if (stbl) {
-                                let stsd = stbl.subboxes.find(b => b.type === "stsd");
-                                if (stsd && stsd.entries[0]) {
-                                    let avc1 = stsd.entries[0];
-                                    if (avc1.avcC) {
-                                        let stream = new MP4Box.DataStream(undefined, 0, MP4Box.DataStream.BIG_ENDIAN);
-                                        avc1.avcC.write(stream);
-                                        return new Uint8Array(stream.buffer, 8); // box header(8 bytes) 제외
-                                    }
-                                }
-                            }
-                        }
+            try {
+                // MP4Box가 분석한 트랙 정보(track) 안에서 샘플 설명(entries)을 직접 탐색
+                // 보통 비디오 트랙의 경우 track.mdia.minf.stbl.stsd.entries 에 코덱 정보가 있습니다.
+                const entries = track?.mdia?.minf?.stbl?.stsd?.entries;
+                if (entries && entries.length > 0) {
+                    const avc1 = entries[0];
+                    if (avc1.avcC) {
+                        const stream = new MP4Box.DataStream(undefined, 0, MP4Box.DataStream.BIG_ENDIAN);
+                        avc1.avcC.write(stream);
+                        return new Uint8Array(stream.buffer, 8); // box header(8 bytes) 제외
                     }
                 }
+            } catch (err) {
+                console.warn("Extradata 추출 중 예외 발생:", err);
             }
             return null;
         }
