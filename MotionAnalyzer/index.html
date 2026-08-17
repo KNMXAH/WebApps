@@ -6,9 +6,13 @@
     <title>중학생을 위한 물리 운동 분석 연구실 (WebCodecs + FFmpeg 정밀 분석)</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+
     <!-- FFmpeg.wasm 및 mp4box.js CDN 로드 -->
-    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+    <!-- <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js"></script> -->
+    <!-- FFmpeg 다운그레이드 -->
+    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+    
     <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/mp4box.js/0.5.2/mp4box.all.min.js"></script> -->
     <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.min.js"></script>
     <style>
@@ -239,26 +243,14 @@
         const analysisCanvas = document.getElementById('analysis-canvas');
         const analysisCtx = analysisCanvas.getContext('2d');
 
-        const { FFmpeg } = FFmpegWASM;
-        let ffmpeg = null;
-
+        const { createFFmpeg, fetchFile } = FFmpeg;
+        const ffmpeg = createFFmpeg({ log: true });
 
         async function initFFmpeg() {
-            if (ffmpeg && ffmpeg.loaded) return ffmpeg;
-
-            ffmpeg = new FFmpegWASM.FFmpeg();
-
-            const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
-
-            // @ffmpeg/util은 브라우저에서 보통 FFmpegUtil 이라는 전역 객체로 들어옵니다.
-            const { toBlobURL } = FFmpegUtil; 
-
-            await ffmpeg.load({
-                coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-                wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-            });
-
-            console.log("FFmpeg 로딩 완료!");
+            if (!ffmpeg.isLoaded()) {
+                await ffmpeg.load();
+                console.log("FFmpeg v0.11.6 로딩 완료!");
+            }
             return ffmpeg;
         }
 
