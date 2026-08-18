@@ -29,17 +29,27 @@ export function parseWithMp4Box(arrayBuffer) {
       }
 
       // 코덱 description(avcC/hvcC) 추출
+      // 주의: mp4box.all.min.js 번들에서 DataStream은 MP4Box.DataStream이 아니라
+      // 전역 DataStream으로 노출된다(버전에 따라 다를 수 있어 둘 다 시도한다).
+      // MP4의 avcC/hvcC 샘플은 AVCC(length-prefixed) 형식이라 description 없이
+      // VideoDecoder.decode()에 넣으면 반드시 실패한다 — 절대 조용히 넘어가지 않는다.
       let description;
+      const DS = (typeof DataStream !== 'undefined') ? DataStream
+                : (typeof MP4Box !== 'undefined' && MP4Box.DataStream) ? MP4Box.DataStream
+                : null;
       try {
+        if (!DS) throw new Error('DataStream을 찾을 수 없습니다 (mp4box.js 번들 확인 필요)');
         const trak = mp4boxfile.getTrackById(vTrack.id);
         const entry = trak.mdia.minf.stbl.stsd.entries[0];
         const box = entry.avcC || entry.hvcC || entry.vpcC || entry.av1C;
-        if (box) {
-          const stream = new MP4Box.DataStream(undefined, 0, MP4Box.DataStream.BIG_ENDIAN);
-          box.write(stream);
-          description = new Uint8Array(stream.buffer, 8); // 박스 헤더(8바이트) 제외
-        }
-      } catch (e) { /* description 없이 진행, isConfigSupported가 걸러줌 */ }
+        if (!box) throw new Error('avcC/hvcC/vpcC/av1C 박스를 찾을 수 없습니다');
+        const stream = new DS(undefined, 0, DS.BIG_ENDIAN);
+        box.write(stream);
+        description = new Uint8Array(stream.buffer, 8); // 박스 헤더(8바이트) 제외
+      } catch (e) {
+        console.warn('[demuxer] codec description 추출 실패 — 이 트랙은 직접 디코딩할 수 없습니다:', e.message);
+        description = undefined;
+      }
 
       // 전체 샘플을 추출하도록 설정
       mp4boxfile.setExtractionOptions(vTrack.id, null, { nbSamples: 100000 });

@@ -15,6 +15,12 @@
 html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:var(--font-body);}
 button,input{font-family:inherit;}
 
+/* 중요: [hidden] 속성과 .panel-center/.work-layout 등의 display:flex 규칙은
+   CSS 우선순위(specificity)가 같다. 이 상태에서는 나중에 로드되는 규칙이
+   이기므로, hidden="true"로 설정해도 display:flex인 패널이 계속 보이는
+   버그가 생긴다. !important로 hidden을 항상 최우선으로 강제한다. */
+[hidden]{display:none !important;}
+
 /* ===== 헤더 ===== */
 .app-header{
   display:flex;align-items:center;gap:16px;padding:14px 20px;

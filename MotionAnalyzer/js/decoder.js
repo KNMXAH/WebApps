@@ -3,6 +3,12 @@
 // 보장하지 않고, n/fps 계산은 VFR 영상에서 근본적으로 틀리기 때문이다.
 // WebCodecs는 탐색이라는 개념이 없다: 인코딩된 샘플을 순서대로 넣으면
 // 디코더가 샘플당 VideoFrame을 정확히 하나씩 반환한다.
+//
+// 주의(중요): VideoDecoder의 output/error 콜백은 생성자에 넘긴 시점에 내부적으로
+// 고정된다. `decoder.output = fn`처럼 나중에 속성을 재할당해도 실제 디코딩
+// 파이프라인은 그 새 함수를 호출하지 않는다(단순히 사용되지 않는 프로퍼티가
+// 추가될 뿐). 이 파일은 그 문제를 피하기 위해, 생성자에서 한 번만 콜백을 등록하고
+// 그 콜백이 "현재 등록된 핸들러"를 간접 호출하는 디스패처 패턴을 쓴다.
 
 export function isWebCodecsSupported() {
   return typeof VideoDecoder !== 'undefined';
@@ -26,7 +32,11 @@ export async function checkConfigSupported({ codec, codedWidth, codedHeight, des
  */
 export function createRandomAccessDecoder(demux) {
   let decoder = null;
-  let configured = false;
+
+  // 현재 활성 핸들러 — decodeFrame/decodeRange 호출마다 교체된다.
+  // 아무도 등록하지 않은 상태(기본값)에서 프레임이 나오면 즉시 close()해 누수를 막는다.
+  let currentOutput = (frame) => { try { frame.close(); } catch (e) { /* noop */ } };
+  let currentError = (e) => console.error('VideoDecoder error:', e);
 
   function nearestKeyframeAtOrBefore(n) {
     for (let i = n; i >= 0; i--) {
@@ -35,14 +45,27 @@ export function createRandomAccessDecoder(demux) {
     return 0;
   }
 
-  async function ensureDecoder(config) {
-    if (decoder && configured) return;
+  function ensureDecoder(config) {
+    if (decoder) return;
+    // 콜백은 여기서 딱 한 번만 등록한다. 실제 동작은 항상 currentOutput/currentError를
+    // 간접 호출하므로, 아래 decodeFrame/decodeRange는 이 변수만 바꿔치기하면 된다.
     decoder = new VideoDecoder({
-      output: () => { /* decodeFrame()이 개별적으로 output을 오버라이드함 */ },
-      error: (e) => console.error('VideoDecoder error:', e)
+      output: (frame) => currentOutput(frame),
+      error: (e) => currentError(e)
     });
     decoder.configure(config);
-    configured = true;
+  }
+
+  function feedSamples(fromIdx, toIdx) {
+    for (let i = fromIdx; i <= toIdx; i++) {
+      const data = demux.getSampleData(i);
+      const chunk = new EncodedVideoChunk({
+        type: demux.frameIndex[i].isKey ? 'key' : 'delta',
+        timestamp: Math.round(demux.frameIndex[i].t * 1e6),
+        data
+      });
+      decoder.decode(chunk);
+    }
   }
 
   /**
@@ -50,32 +73,28 @@ export function createRandomAccessDecoder(demux) {
    * 사용 후 반드시 close()를 호출해야 한다(메모리 누수 방지).
    */
   async function decodeFrame(n, config) {
-    await ensureDecoder(config);
+    ensureDecoder(config);
+    if (decoder.state !== 'configured') decoder.configure(config);
     const k = nearestKeyframeAtOrBefore(n);
 
     return new Promise((resolve, reject) => {
       const collected = [];
       let settled = false;
 
-      decoder.ondequeue = null;
-      // output 콜백을 이 호출 전용으로 교체
-      decoder.output = (frame) => collected.push(frame);
-      decoder.error = (e) => { if (!settled) { settled = true; reject(e); } };
+      const closeAllCollected = () => {
+        for (const f of collected) { try { f.close(); } catch (e) { /* noop */ } }
+      };
+
+      currentOutput = (frame) => collected.push(frame);
+      currentError = (e) => {
+        if (settled) return;
+        settled = true;
+        closeAllCollected();
+        reject(e);
+      };
 
       try {
-        // 이전 상태 초기화(랜덤 액세스 준비)
-        if (decoder.state !== 'configured') decoder.configure(config);
-
-        for (let i = k; i <= n; i++) {
-          const data = demux.getSampleData(i);
-          const chunk = new EncodedVideoChunk({
-            type: demux.frameIndex[i].isKey ? 'key' : 'delta',
-            timestamp: Math.round(demux.frameIndex[i].t * 1e6),
-            data
-          });
-          decoder.decode(chunk);
-        }
-
+        feedSamples(k, n);
         decoder.flush().then(() => {
           if (settled) return;
           settled = true;
@@ -85,9 +104,14 @@ export function createRandomAccessDecoder(demux) {
             try { collected[i].close(); } catch (e) { /* noop */ }
           }
           resolve(target);
-        }).catch(reject);
+        }).catch((e) => {
+          if (settled) return;
+          settled = true;
+          closeAllCollected();
+          reject(e);
+        });
       } catch (e) {
-        reject(e);
+        if (!settled) { settled = true; closeAllCollected(); reject(e); }
       }
     });
   }
@@ -98,14 +122,15 @@ export function createRandomAccessDecoder(demux) {
    * onFrame 내부에서 frame.close()를 책임지고 호출해야 한다.
    */
   async function decodeRange(start, end, config, onFrame, onProgress) {
-    await ensureDecoder(config);
+    ensureDecoder(config);
+    if (decoder.state !== 'configured') decoder.configure(config);
     const k = nearestKeyframeAtOrBefore(start);
 
     return new Promise((resolve, reject) => {
       let idx = k;
       let settled = false;
 
-      decoder.output = (frame) => {
+      currentOutput = (frame) => {
         const currentIdx = idx;
         idx++;
         if (currentIdx < start) {
@@ -116,30 +141,23 @@ export function createRandomAccessDecoder(demux) {
           if (onProgress) onProgress(currentIdx - start + 1, end - start + 1);
         }
       };
-      decoder.error = (e) => { if (!settled) { settled = true; reject(e); } };
+      currentError = (e) => { if (!settled) { settled = true; reject(e); } };
 
       try {
-        if (decoder.state !== 'configured') decoder.configure(config);
-        for (let i = k; i <= end; i++) {
-          const data = demux.getSampleData(i);
-          const chunk = new EncodedVideoChunk({
-            type: demux.frameIndex[i].isKey ? 'key' : 'delta',
-            timestamp: Math.round(demux.frameIndex[i].t * 1e6),
-            data
-          });
-          decoder.decode(chunk);
-        }
-        decoder.flush().then(() => { if (!settled) { settled = true; resolve(); } }).catch(reject);
+        feedSamples(k, end);
+        decoder.flush().then(() => { if (!settled) { settled = true; resolve(); } }).catch((e) => {
+          if (!settled) { settled = true; reject(e); }
+        });
       } catch (e) {
-        reject(e);
+        if (!settled) { settled = true; reject(e); }
       }
     });
   }
 
   function close() {
+    currentOutput = (frame) => { try { frame.close(); } catch (e) { /* noop */ } };
     try { if (decoder && decoder.state !== 'closed') decoder.close(); } catch (e) { /* noop */ }
     decoder = null;
-    configured = false;
   }
 
   return { decodeFrame, decodeRange, close };

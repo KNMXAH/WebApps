@@ -45,7 +45,13 @@ async function handleParse({ arrayBuffer }) {
   const fps = estimateFps(result.frameIndex);
   const deviationPct = frameIntervalDeviationPct(result.frameIndex);
 
-  const supported = await checkConfigSupported({
+  // avc1/avc3/hvc1/hev1은 AVCC(length-prefixed) 샘플이라 description이 반드시 있어야
+  // VideoDecoder.decode()가 성공한다. isConfigSupported는 description 없이도
+  // true를 반환할 수 있어(브라우저마다 관대함이 다름) 여기서 별도로 강제한다.
+  const requiresDescription = /^(avc1|avc3|hvc1|hev1)/.test(result.codecString || '');
+  const missingRequiredDescription = requiresDescription && !result.description;
+
+  const supported = missingRequiredDescription ? false : await checkConfigSupported({
     codec: result.codecString,
     codedWidth: result.width,
     codedHeight: result.height,
