@@ -52,7 +52,7 @@
             for (let i = 0; i < totalNucleons; i++) {
                 const nucleon = document.createElement('a-sphere');
                 // 양성자는 빨간색, 중성자는 회색으로 표현
-                nucleon.setAttribute('color', i < protonsCount ? '#ff4d4d' : '#cccccc');
+                nucleon.setAttribute('color', (i % 2 == 0) ? '#ff4d4d' : '#cccccc');
                 nucleon.setAttribute('radius', nucleonRadius);
                 
                 let x = 0, y = 0, z = 0;
