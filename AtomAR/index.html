@@ -44,20 +44,37 @@
             // 양성자가 1개면 중성자 0개, 2개 이상이면 양성자 수 = 중성자 수
             const neutronCount = (protonsCount === 1) ? 0 : protonsCount;
             const totalNucleons = protonsCount + neutronCount;
+            const nucleonRadius = 0.04; // 핵자 하나의 반지름
+            // 핵자들이 서로 겹치지 않고 딱 붙어있도록 하기 위한 최소 거리 (지름 + 알파)
+            const spacing = nucleonRadius * 1.1;
 
             // 원자핵 뭉치 표현 (여러 개의 구가 서로 붙어있는 형태)
             for (let i = 0; i < totalNucleons; i++) {
                 const nucleon = document.createElement('a-sphere');
                 // 양성자는 빨간색, 중성자는 회색으로 표현
                 nucleon.setAttribute('color', i < protonsCount ? '#ff4d4d' : '#cccccc');
-                nucleon.setAttribute('radius', '0.04');
+                nucleon.setAttribute('radius', nucleonRadius);
                 
-                // 약간씩 뭉쳐있도록 위치 분산
-                const angle = (i / totalNucleons) * Math.PI * 2;
-                const offset = totalNucleons > 1 ? 0.03 : 0;
-                const x = Math.cos(angle) * offset;
-                const z = Math.sin(angle) * offset;
-                nucleon.setAttribute('position', `${x} 0 ${z}`);
+                let x = 0, y = 0, z = 0;
+
+                // 개수에 따라 겹치지 않게 좌표 분산 배치
+                if (totalNucleons === 1) {
+                    x = 0; y = 0; z = 0;
+                } else if (totalNucleons === 2) {
+                    // 2개일 때는 서로 딱 붙게
+                    x = (i === 0 ? -spacing : spacing) * 0.5;
+                } else {
+                    // 3개 이상일 때는 0,0,0 중심을 향해 촘촘하게 배치 (지그재그 구체 형태)
+                    const angle = (i / totalNucleons) * Math.PI * 2;
+                    // 간격을 아주 좁게 주어 서로 겹치듯 밀착시킴
+                    const r = (i % 2 === 0) ? spacing * 0.6 : spacing * 1.0;
+                    x = Math.cos(angle) * r;
+                    z = Math.sin(angle) * r;
+                    // 높이(Y)도 중앙으로 모이도록 압축
+                    y = ((i % 3) - 1) * (nucleonRadius * 0.4);
+                }
+
+                nucleon.setAttribute('position', `${x} ${y} ${z}`);
                 
                 // 기본 모드용 스케일 태그 부여
                 nucleon.classList.add('nucleon-scale');
