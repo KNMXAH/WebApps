@@ -17,7 +17,7 @@
     <a-scene embedded arjs="sourceType: webcam; patternRatio: 0.5;">
         <!-- 본인의 patt 파일 경로로 수정하세요 -->
         <a-marker preset="hiro" size="0.09">
-            <a-entity id="atom" position="0 0.5 0" atom-vibration>
+            <a-entity id="atom" position="0 0.5 0" scale="0.6 0.6 0.6" atom-vibration>
                 <!-- 하얀 껍질 (원자 전체의 크기를 나타냄, 반지름 1) -->
                 <a-sphere id="shell" radius="1" color="white" opacity="0.8" transparent="true"></a-sphere>
                 <!-- 원자핵 및 전자 컨테이너 -->
@@ -35,8 +35,8 @@
         const nucleusContainer = document.querySelector('#nucleus-container');
         const electronsContainer = document.querySelector('#electrons-container');
         const toggle = document.querySelector('#realSizeToggle');
-        const fromDistance = 0.4;
-        const toDistance = 0.23;
+        const fromDistance = 3.5;
+        const toDistance = 2.3;
         let alpha = 1;
 
         function createAtom() {
