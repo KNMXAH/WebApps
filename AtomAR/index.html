@@ -17,7 +17,7 @@
     <a-scene embedded arjs="sourceType: webcam; patternRatio: 0.5;">
         <!-- 본인의 patt 파일 경로로 수정하세요 -->
         <a-marker preset="hiro">
-            <a-entity id="atom" position="0 0.5 0">
+            <a-entity id="atom" position="0 0.5 0" atom-vibration>
                 <!-- 하얀 껍질 (원자 전체의 크기를 나타냄, 반지름 1) -->
                 <a-sphere id="shell" radius="1" color="white" opacity="0.8" transparent="true"></a-sphere>
                 <!-- 원자핵 및 전자 컨테이너 -->
@@ -35,6 +35,9 @@
         const nucleusContainer = document.querySelector('#nucleus-container');
         const electronsContainer = document.querySelector('#electrons-container');
         const toggle = document.querySelector('#realSizeToggle');
+        const fromDistance = 0.4;
+        const toDistance = 0.23;
+        let alpha = 1;
 
         function createAtom() {
             // 1. 원자핵 생성 (양성자 + 중성자)
@@ -57,7 +60,7 @@
                 nucleon.setAttribute('position', `${x} 0 ${z}`);
                 
                 // 기본 모드용 스케일 태그 부여
-                nucleon.classList.add('component-scale');
+                nucleon.classList.add('nucleon-scale');
                 nucleusContainer.appendChild(nucleon);
             }
 
@@ -71,7 +74,7 @@
                 electron.setAttribute('color', '#3399ff');
                 electron.setAttribute('radius', '0.015'); // 기본 모드에서의 크기
                 electron.setAttribute('position', `${0.6 + i*0.1} 0 0`); // 궤도 반지름
-                electron.classList.add('component-scale');
+                electron.classList.add('electron-scale');
                 
                 orbit.appendChild(electron);
                 electronsContainer.appendChild(orbit);
@@ -84,19 +87,54 @@
                 const camera = document.querySelector('a-camera') || document.querySelector('[camera]');
                 const distance = this.el.object3D.position.distanceTo(camera.object3D.position);
                 
+                alpha = (distance - toDistance)/(fromDistance - toDistance);
+                alpha = Math.min(Math.max(alpha, 0.0), 1.0);
+                
+                
                 // 카메라가 가까이 오면(2미터 이내) 껍질이 투명해짐
-                shell.setAttribute('opacity', distance < 2 ? 0.15 : 0.8);
+                shell.setAttribute('opacity', alpha);
                 
                 // Real Size 토글 체크 여부 확인
                 const isReal = toggle.checked;
                 
                 // Real Size 체크 시: 원자핵과 전자의 실제 크기 비율 반영 (극단적으로 작게 설정, 예: 0.0005배)
                 // 가시성을 위해 완전히 0으로 만들면 안 보이므로 학생들이 인지할 수 있는 최소한의 극단적 비율(0.001배) 적용
-                const scaleValue = isReal ? 0.001 : 1;
+                const n_scaleValue = isReal ? 1/400 : 1;
+                const e_scaleValue = isReal ? 1/4000000 : 1;
                 
-                document.querySelectorAll('.component-scale').forEach(el => {
-                    el.setAttribute('scale', `${scaleValue} ${scaleValue} ${scaleValue}`);
+                document.querySelectorAll('.electron-scale').forEach(el => {
+                    el.setAttribute('scale', `${e_scaleValue} ${e_scaleValue} ${e_scaleValue}`);
                 });
+                document.querySelectorAll('.nucleon-scale').forEach(el => {
+                    el.setAttribute('scale', `${n_scaleValue} ${n_scaleValue} ${n_scaleValue}`);
+                });
+            }
+        });
+
+        // --- 원자 미세 진동(열운동) 효과 컴포넌트 ---
+        AFRAME.registerComponent('atom-vibration', {
+            init: function() {
+                // 원자의 원래 중심 위치 저장
+                this.originalPosition = { x: 0, y: 0.5, z: 0 };
+                // 진동 속도와 범위를 다르게 주기 위한 고유값 생성
+                this.seedX = Math.random() * 100;
+                this.seedZ = Math.random() * 100;
+            },
+            tick: function(time) {
+                // 학생들이 관찰하기 좋게 아주 미세하고 부드러운 진동 폭 설정 (단위: 미터)
+                const vibrationIntensity = 0.015; // 약 1.5cm 폭으로 흔들림
+                
+                // 시간을 바탕으로 자연스러운 삼각함수 파동 생성 (속도 조절 가능)
+                const speed = 0.003;
+
+                // object3D를 직접 조작하는 것이 setAttribute보다 모바일 환경에서 훨씬 부드럽습니다 (성능 최적화)
+                const obj3D = this.el.object3D;
+                const offsetX = Math.sin(time * speed + this.seedX) * vibrationIntensity;
+                const offsetZ = Math.cos(time * speed * 0.8 + this.seedZ) * vibrationIntensity;
+                
+                // 원래 위치를 중심으로 X, Z 축 방향으로 무작위성 가미하여 이동
+                obj3D.position.x = this.originalPosition.x + offsetX;
+                obj3D.position.z = this.originalPosition.z + offsetZ;
             }
         });
 
