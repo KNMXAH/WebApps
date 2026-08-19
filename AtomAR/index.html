@@ -85,7 +85,17 @@
         AFRAME.registerComponent('camera-distance-handler', {
             tick: function() {
                 const camera = document.querySelector('a-camera') || document.querySelector('[camera]');
-                const distance = this.el.object3D.position.distanceTo(camera.object3D.position);
+
+                // Three.js의 Vector3 객체를 이용해 월드 좌표를 담을 준비
+                const atomPosition = new THREE.Vector3();
+                const cameraPosition = new THREE.Vector3();
+
+                // 마커(this.el)와 카메라의 실제 3차원 월드 좌표 가져오기
+                this.el.object3D.getWorldPosition(atomPosition);
+                camera.object3D.getWorldPosition(cameraPosition);
+
+                // 거리 계산
+                const distance = atomPosition.distanceTo(cameraPosition);
                 
                 alpha = (distance - toDistance)/(fromDistance - toDistance);
                 alpha = Math.min(Math.max(alpha, 0.0), 1.0);
