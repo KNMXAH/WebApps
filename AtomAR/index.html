@@ -89,6 +89,8 @@
                 
                 alpha = (distance - toDistance)/(fromDistance - toDistance);
                 alpha = Math.min(Math.max(alpha, 0.0), 1.0);
+                console.log("distance: " + distance)
+                console.log("alpha: " + alpha)
                 
                 
                 // 카메라가 가까이 오면(2미터 이내) 껍질이 투명해짐
