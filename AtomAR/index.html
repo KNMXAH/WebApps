@@ -161,10 +161,10 @@
             },
             tick: function(time) {
                 // 학생들이 관찰하기 좋게 아주 미세하고 부드러운 진동 폭 설정 (단위: 미터)
-                const vibrationIntensity = 0.015; // 약 1.5cm 폭으로 흔들림
+                const vibrationIntensity = 0.005; // 약 1.5cm 폭으로 흔들림
                 
                 // 시간을 바탕으로 자연스러운 삼각함수 파동 생성 (속도 조절 가능)
-                const speed = 0.3;
+                const speed = 0.015;
 
                 // object3D를 직접 조작하는 것이 setAttribute보다 모바일 환경에서 훨씬 부드럽습니다 (성능 최적화)
                 const obj3D = this.el.object3D;
