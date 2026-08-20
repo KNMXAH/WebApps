@@ -64,14 +64,24 @@
                     // 2개일 때는 서로 딱 붙게
                     x = (i === 0 ? -spacing : spacing) * 0.5;
                 } else {
-                    // 3개 이상일 때는 0,0,0 중심을 향해 촘촘하게 배치 (지그재그 구체 형태)
-                    const angle = (i / totalNucleons) * Math.PI * 2;
-                    // 간격을 아주 좁게 주어 서로 겹치듯 밀착시킴
-                    const r = (i % 2 === 0) ? spacing * 0.6 : spacing * 1.0;
-                    x = Math.cos(angle) * r;
-                    z = Math.sin(angle) * r;
-                    // 높이(Y)도 중앙으로 모이도록 압축
-                    y = ((i % 3) - 1) * (nucleonRadius * 0.4);
+                    // // 3개 이상일 때는 0,0,0 중심을 향해 촘촘하게 배치 (지그재그 구체 형태)
+                    // const angle = (i / totalNucleons) * Math.PI * 2;
+                    // // 간격을 아주 좁게 주어 서로 겹치듯 밀착시킴
+                    // const r = (i % 2 === 0) ? spacing * 0.6 : spacing * 1.0;
+                    // x = Math.cos(angle) * r;
+                    // z = Math.sin(angle) * r;
+                    // // 높이(Y)도 중앙으로 모이도록 압축
+                    // y = ((i % 3) - 1) * (nucleonRadius * 0.4);
+
+                    // 구면 피보나치 알고리즘 활용
+                    const phi = (1 + Math.sqrt(5)) / 2; // 황금비
+                    const theta = (2 * Math.PI * i) / phi; // 경도
+                    const lat = Math.asin(1 - (2 * (i + 0.5)) / totalNucleons); // 위도
+                    
+                    const r = spacing * 0.8; // 전체 크기 조절
+                    x = Math.cos(lat) * Math.cos(theta) * r;
+                    y = Math.sin(lat) * r;
+                    z = Math.cos(lat) * Math.sin(theta) * r;
                 }
 
                 nucleon.setAttribute('position', `${x} ${y} ${z}`);
@@ -154,7 +164,7 @@
                 const vibrationIntensity = 0.015; // 약 1.5cm 폭으로 흔들림
                 
                 // 시간을 바탕으로 자연스러운 삼각함수 파동 생성 (속도 조절 가능)
-                const speed = 0.003;
+                const speed = 0.3;
 
                 // object3D를 직접 조작하는 것이 setAttribute보다 모바일 환경에서 훨씬 부드럽습니다 (성능 최적화)
                 const obj3D = this.el.object3D;
