@@ -1,156 +1,169 @@
-// worker.js — 무거운 연산(디코딩, 추적)을 메인 스레드에서 분리한다 (§5.4).
-// module worker로 로드되어 ES import를 그대로 사용할 수 있다.
-// 주의: module worker에서는 importScripts()를 쓸 수 없으므로, UMD 형태인
-// mp4box.all.min.js는 fetch 후 평가하여 self.MP4Box로 등록한다.
-async function loadMp4Box() {
-  if (typeof MP4Box !== 'undefined') return;
-  const res = await fetch(new URL('../vendor/mp4box.all.min.js', import.meta.url));
-  const code = await res.text();
-  (0, eval)(code); // UMD 스크립트: self(=this)에 MP4Box를 등록한다
-}
-const mp4boxReady = loadMp4Box();
+// worker.js — 디코딩과 추적을 메인 스레드에서 분리한다(§5.4).
+// 모듈 워커로 실행된다: new Worker(url, { type:'module' })
 
-import { parseWithMp4Box, estimateFps, frameIntervalDeviationPct } from './demuxer.js';
-import { createRandomAccessDecoder, checkConfigSupported } from './decoder.js';
-import { frameToAnalysisBitmap } from './framecache.js';
-import { trackOneFrame, blendTemplate, predictNextPosition, searchRadius, cropImageData, TRACKER_CONFIG } from './tracker.js';
+import { FrameDecoder } from './decoder.js';
+import { Tracker, toGray, TRACK_CONST } from './tracker.js';
 
-let demux = null;
-let config = null;
-let analysisWidth = 0, analysisHeight = 0;
-let bitmapCache = new Map(); // frameIndex -> ImageBitmap (분석 좌표계)
-let offscreen = new OffscreenCanvas(64, 64);
-let offCtx = offscreen.getContext('2d', { willReadFrequently: true });
+let dec = null;
+let AW = 0, AH = 0;
+let cvs = null, ctx = null;
+let frameIndex = null;
 
-function post(type, payload, transfer) {
-  self.postMessage({ type, ...payload }, transfer || []);
-}
+let resumeResolve = null;
+let abortFlag = false;
 
-self.onmessage = async (ev) => {
-  const { cmd } = ev.data;
+const post = (msg, transfer) => self.postMessage(msg, transfer || []);
+
+self.onmessage = async (e) => {
+  const m = e.data;
   try {
-    if (cmd === 'parse') await handleParse(ev.data);
-    else if (cmd === 'buildCache') await handleBuildCache(ev.data);
-    else if (cmd === 'track') await handleTrack(ev.data);
-    else if (cmd === 'decodeSingle') await handleDecodeSingle(ev.data);
+    switch (m.type) {
+      case 'configure': return await onConfigure(m);
+      case 'getFrame': return await onGetFrame(m);
+      case 'cacheRange': return await onCacheRange(m);
+      case 'track': return await onTrack(m);
+      case 'resize':
+        AW = m.analysisWidth; AH = m.analysisHeight;
+        cvs = new OffscreenCanvas(AW, AH);
+        ctx = cvs.getContext('2d', { willReadFrequently: true });
+        post({ type: 'resized', reqId: m.reqId });
+        return;
+      case 'trackResume':
+        if (resumeResolve) { const r = resumeResolve; resumeResolve = null; r({ px: m.px, py: m.py }); }
+        return;
+      case 'trackAbort':
+        abortFlag = true;
+        if (dec) dec.cancel();
+        if (resumeResolve) { const r = resumeResolve; resumeResolve = null; r(null); }
+        return;
+      case 'dispose':
+        if (dec) dec.cancel();
+        dec = null;
+        return;
+    }
   } catch (err) {
-    post('error', { message: err.message || String(err), context: cmd });
+    post({ type: 'error', reqId: m.reqId, message: (err && err.message) || String(err) });
   }
 };
 
-async function handleParse({ arrayBuffer }) {
-  await mp4boxReady;
-  const result = await parseWithMp4Box(arrayBuffer);
-  demux = result;
-  const fps = estimateFps(result.frameIndex);
-  const deviationPct = frameIntervalDeviationPct(result.frameIndex);
-
-  // avc1/avc3/hvc1/hev1은 AVCC(length-prefixed) 샘플이라 description이 반드시 있어야
-  // VideoDecoder.decode()가 성공한다. isConfigSupported는 description 없이도
-  // true를 반환할 수 있어(브라우저마다 관대함이 다름) 여기서 별도로 강제한다.
-  const requiresDescription = /^(avc1|avc3|hvc1|hev1)/.test(result.codecString || '');
-  const missingRequiredDescription = requiresDescription && !result.description;
-
-  const supported = missingRequiredDescription ? false : await checkConfigSupported({
-    codec: result.codecString,
-    codedWidth: result.width,
-    codedHeight: result.height,
-    description: result.description
-  });
-
-  post('parsed', {
-    ok: true,
-    supported,
-    codecString: result.codecString,
-    width: result.width,
-    height: result.height,
-    frameIndex: result.frameIndex,
-    estimatedFps: fps,
-    deviationPct,
-    durationSec: result.durationSec
-  });
+async function onConfigure(m) {
+  AW = m.analysisWidth; AH = m.analysisHeight;
+  cvs = new OffscreenCanvas(AW, AH);
+  ctx = cvs.getContext('2d', { willReadFrequently: true });
+  frameIndex = m.frameIndex;
+  dec = new FrameDecoder(m.config, m.frameIndex, m.samples);
+  post({ type: 'configured', reqId: m.reqId });
 }
 
-async function handleDecodeSingle({ frameNum, width, height }) {
-  config = { codec: demux.codecString, codedWidth: demux.width, codedHeight: demux.height, description: demux.description };
-  const dec = createRandomAccessDecoder(demux);
-  const frame = await dec.decodeFrame(frameNum, config);
-  if (!frame) { post('decodedSingle', { frameNum, bitmap: null }); dec.close(); return; }
-  const bmp = await frameToAnalysisBitmap(frame, width, height);
-  frame.close();
-  dec.close();
-  post('decodedSingle', { frameNum, bitmap: bmp }, [bmp]);
+function drawFrame(frame) {
+  ctx.drawImage(frame, 0, 0, AW, AH);
 }
 
-async function handleBuildCache({ startFrame, endFrame, width, height }) {
-  analysisWidth = width; analysisHeight = height;
-  bitmapCache.clear();
-  config = { codec: demux.codecString, codedWidth: demux.width, codedHeight: demux.height, description: demux.description };
-  const dec = createRandomAccessDecoder(demux);
-
-  await dec.decodeRange(startFrame, endFrame, config, async (frame, idx) => {
-    const bmp = await frameToAnalysisBitmap(frame, width, height);
-    frame.close();
-    bitmapCache.set(idx, bmp);
-  }, (done, total) => {
-    post('cacheProgress', { done, total });
-  });
-
-  dec.close();
-  post('cacheDone', { count: bitmapCache.size });
+async function onGetFrame(m) {
+  if (!dec) throw new Error('디코더가 준비되지 않았습니다.');
+  const frame = await dec.getFrame(m.frame);
+  if (!frame) { post({ type: 'error', reqId: m.reqId, message: '프레임을 디코딩하지 못했습니다.' }); return; }
+  drawFrame(frame);
+  frame.close();                                  // VideoFrame 은 즉시 닫는다(§5.3)
+  const bmp = await createImageBitmap(cvs);
+  post({ type: 'frame', reqId: m.reqId, frame: m.frame, bitmap: bmp }, [bmp]);
 }
 
-function getImageDataForFrame(idx) {
-  const bmp = bitmapCache.get(idx);
-  if (!bmp) return null;
-  if (offscreen.width !== analysisWidth || offscreen.height !== analysisHeight) {
-    offscreen = new OffscreenCanvas(analysisWidth, analysisHeight);
-    offCtx = offscreen.getContext('2d', { willReadFrequently: true });
-  }
-  offCtx.clearRect(0, 0, analysisWidth, analysisHeight);
-  offCtx.drawImage(bmp, 0, 0);
-  return offCtx.getImageData(0, 0, analysisWidth, analysisHeight);
-}
+async function onCacheRange(m) {
+  if (!dec) throw new Error('디코더가 준비되지 않았습니다.');
+  abortFlag = false;
+  const { start, end, reqId } = m;
+  const wantCts = new Map();
+  for (let i = start; i <= end; i++) wantCts.set(Math.round(frameIndex[i].t * 1e6), i);
 
-async function handleTrack({ startFrame, endFrame, initPoint, boxW, boxH, resumeTemplateCrop }) {
-  const history = []; // {frame, t, x, y}
-  let template = resumeTemplateCrop || null;
-
-  if (!template) {
-    const img0 = getImageDataForFrame(startFrame);
-    template = cropImageData(img0, Math.round(initPoint.x - boxW / 2), Math.round(initPoint.y - boxH / 2), boxW, boxH);
-    history.push({ frame: startFrame, t: demux.frameIndex[startFrame].t, x: initPoint.x, y: initPoint.y });
-    post('trackPoint', { frame: startFrame, x: initPoint.x, y: initPoint.y, confidence: 1, resumed: false });
-  }
-
-  let lastMoveDist = 0;
-  const total = endFrame - startFrame;
-
-  for (let i = startFrame + 1; i <= endFrame; i++) {
-    const img = getImageDataForFrame(i);
-    if (!img) { post('error', { message: `프레임 ${i} 캐시 없음`, context: 'track' }); return; }
-
-    const predicted = predictNextPosition(history, demux.frameIndex[i].t) || history[history.length - 1];
-    const radius = searchRadius(Math.max(boxW, boxH), lastMoveDist);
-
-    const result = trackOneFrame(img, template, predicted, boxW, boxH, radius);
-
-    if (result.confidence < TRACKER_CONFIG.CONFIDENCE_THRESHOLD) {
-      post('trackPaused', { frame: i, done: i - startFrame, total, templateSnapshot: template });
-      return; // 사용자가 클릭 후 'track' 명령을 다시 보내 재개
+  let fails = 0, done = 0;
+  const total = end - start + 1;
+  try {
+    for await (const frame of dec.iterate(start, end)) {
+      if (abortFlag) { frame.close(); break; }
+      const idx = wantCts.get(Math.round(frame.timestamp));
+      if (idx === undefined) { frame.close(); continue; }
+      try {
+        drawFrame(frame);
+        frame.close();
+        const bmp = await createImageBitmap(cvs);
+        done++;
+        post({ type: 'cachedFrame', reqId, frame: idx, bitmap: bmp, done, total }, [bmp]);
+        fails = 0;
+      } catch (err) {
+        try { frame.close(); } catch { }
+        if (++fails >= 3) throw new Error('연속으로 프레임을 읽지 못했습니다.');
+      }
     }
+  } finally {
+    dec.cancel();
+  }
+  post({ type: 'cacheDone', reqId, done, total });
+}
 
-    const prev = history[history.length - 1];
-    lastMoveDist = Math.hypot(result.x - prev.x, result.y - prev.y);
+async function onTrack(m) {
+  if (!dec) throw new Error('디코더가 준비되지 않았습니다.');
+  abortFlag = false;
 
-    if (result.confidence >= TRACKER_CONFIG.MIN_UPDATE_CONFIDENCE && result.matchedCrop) {
-      template = blendTemplate(template, result.matchedCrop);
+  const { start, end, seedFrame, seedPoint, box, prev, reqId } = m;
+  const tracker = new Tracker();
+  const history = (prev || []).map(p => ({ t: p.t, px: p.px, py: p.py }));
+
+  const wantCts = new Map();
+  for (let i = seedFrame; i <= end; i++) wantCts.set(Math.round(frameIndex[i].t * 1e6), i);
+
+  let seeded = false;
+  let fails = 0;
+
+  try {
+    for await (const frame of dec.iterate(seedFrame, end)) {
+      if (abortFlag) { frame.close(); break; }
+      const idx = wantCts.get(Math.round(frame.timestamp));
+      if (idx === undefined) { frame.close(); continue; }
+
+      let img;
+      try {
+        drawFrame(frame);
+        frame.close();
+        img = ctx.getImageData(0, 0, AW, AH);
+        fails = 0;
+      } catch (err) {
+        try { frame.close(); } catch { }
+        if (++fails >= 3) throw new Error('연속으로 프레임을 읽지 못했습니다.');
+        continue;
+      }
+
+      const t = frameIndex[idx].t;
+
+      if (!seeded) {
+        tracker.setTemplate(img, seedPoint.x, seedPoint.y, box.w, box.h);
+        history.push({ t, px: seedPoint.x, py: seedPoint.y });
+        post({ type: 'trackPoint', frame: idx, t, px: seedPoint.x, py: seedPoint.y, confidence: 1, seed: true });
+        seeded = true;
+        continue;
+      }
+
+      const gray = toGray(img);
+      let r = tracker.step(img, gray, history, t);
+
+      if (r.confidence < TRACK_CONST.CONFIDENCE_THRESHOLD) {
+        // 신뢰도 미달 → 즉시 정지하고 사용자 클릭을 기다린다(§9.2)
+        post({ type: 'trackPaused', frame: idx, t, confidence: r.confidence });
+        const answer = await new Promise(res => { resumeResolve = res; });
+        if (!answer || abortFlag) break;
+        tracker.setTemplate(img, answer.px, answer.py, box.w, box.h);
+        history.push({ t, px: answer.px, py: answer.py });
+        post({ type: 'trackPoint', frame: idx, t, px: answer.px, py: answer.py, confidence: 1, edited: true });
+        continue;
+      }
+
+      tracker.updateTemplate(img, r.px, r.py);
+      history.push({ t, px: r.px, py: r.py });
+      post({ type: 'trackPoint', frame: idx, t, px: r.px, py: r.py, confidence: r.confidence });
     }
-
-    history.push({ frame: i, t: demux.frameIndex[i].t, x: result.x, y: result.y });
-    post('trackPoint', { frame: i, x: result.x, y: result.y, confidence: result.confidence, resumed: false });
-    post('trackProgress', { done: i - startFrame, total });
+  } finally {
+    dec.cancel();
   }
 
-  post('trackDone', {});
+  post({ type: 'trackDone', reqId, aborted: abortFlag });
 }

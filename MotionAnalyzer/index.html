@@ -1,195 +1,206 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>운동 분석 – MotionAnalyzer</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>운동 분석기 — 에너지 관찰</title>
 <link rel="stylesheet" href="style.css">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-<!-- <script src="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" as="style"></script> -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css">
 </head>
 <body>
 
 <header class="app-header">
-  <div class="brand">
-    <span class="brand-mark" aria-hidden="true">●→</span>
-    <span class="brand-name">MotionAnalyzer</span>
-  </div>
-  <p class="privacy-note">🔒 영상은 이 기기 안에서만 처리되며, 서버로 전송되지 않습니다.</p>
-  <button id="newVideoBtn" class="btn btn-ghost" type="button">새 영상 업로드</button>
+  <h1>운동 분석기</h1>
+  <p class="subtitle">떨어지거나 던진 물체의 영상에서 운동 에너지와 위치 에너지를 관찰합니다.</p>
+  <p class="privacy">🔒 영상은 이 기기 안에서만 처리됩니다. 어떤 서버로도 전송되지 않습니다.</p>
 </header>
 
-<main class="app-main">
+<div id="guide" class="guide" role="status" aria-live="polite">영상 파일을 선택하세요.</div>
 
-  <!-- 안내 박스: 항상 보이며, 현재 상태에서 파생된 문구만 표시한다 -->
-  <div id="guidanceBox" class="guidance-box" role="status" aria-live="polite"></div>
+<div id="notice" class="notice hidden"></div>
 
-  <!-- ===================== IDLE ===================== -->
-  <section data-phase-panel="IDLE" class="panel panel-center">
-    <div class="upload-card">
-      <h1>자유낙하 · 포물선 운동을 분석해 보세요</h1>
-      <p class="muted">촬영한 영상을 올리면, 공의 위치를 자동으로 추적하고 운동에너지와 위치에너지의 변화를 눈으로 확인할 수 있어요.</p>
-      <label class="file-drop" for="fileInput">
-        <span class="file-drop-icon" aria-hidden="true">⬆</span>
-        <span>영상 파일 선택 (.mp4, .mov, .webm 등)</span>
-      </label>
-      <input type="file" id="fileInput" accept="video/*" hidden>
-      <details class="shoot-guide">
-        <summary>촬영 가이드 보기</summary>
+<main class="layout">
+
+  <!-- ===== 좌측: 캔버스 ===== -->
+  <section class="stage-col">
+    <div id="stageWrap" class="stage-wrap">
+      <video id="previewVideo" class="preview-video hidden" muted playsinline preload="auto"></video>
+      <canvas id="stage" class="stage"></canvas>
+      <canvas id="loupe" class="loupe hidden" width="180" height="180"></canvas>
+      <div id="preciseBadge" class="badge hidden">정밀 프레임</div>
+      <div id="stageMsg" class="stage-msg hidden"></div>
+      <button id="aimConfirm" class="btn primary aim-confirm hidden" type="button">여기로 확인</button>
+    </div>
+    <div id="stageCaption" class="stage-caption"></div>
+    <div id="legend" class="legend hidden">
+      <span class="key"><i class="dot real"></i>빨간 점 = 실제 측정</span>
+      <span class="key"><i class="line theory"></i>파란 선 = 이론</span>
+      <span class="key"><i class="line base"></i>점선 = 위치 에너지 기준면</span>
+    </div>
+  </section>
+
+  <!-- ===== 우측: 단계별 패널 ===== -->
+  <section class="side-col" id="side">
+
+    <!-- 1단계: 업로드 -->
+    <div class="panel" id="p-upload">
+      <h2>1. 영상 고르기</h2>
+      <p class="hint">이 앱은 <b>자유낙하와 포물선 운동</b> 전용입니다. 진자(추)나 경사면을 굴러가는 운동에는 맞지 않습니다.</p>
+      <input type="file" id="fileInput" accept="video/*,.mov,.mp4,.webm,.mkv,.avi" class="file-input">
+      <label for="fileInput" class="btn primary block">영상 파일 선택</label>
+      <div id="fileInfo" class="kv hidden"></div>
+      <details class="tips">
+        <summary>촬영할 때 지켜야 할 것</summary>
         <ul>
-          <li>카메라를 고정하고 촬영 중 움직이지 않습니다.</li>
-          <li>촬영 중 줌을 사용하지 않습니다.</li>
-          <li>운동 평면이 카메라와 나란하도록 옆에서 촬영합니다.</li>
-          <li>배경과 뚜렷하게 구분되는 색의 공을 사용합니다.</li>
-          <li>기준자는 운동이 일어나는 평면과 같은 거리에 놓습니다.</li>
-          <li>이 앱은 <strong>자유낙하·포물선 운동 전용</strong>입니다. 진자나 경사면 운동에는 맞지 않습니다.</li>
+          <li>카메라를 삼각대 등에 <b>고정</b>하고, 찍는 동안 움직이지 마세요.</li>
+          <li>찍는 동안 <b>줌을 쓰지 마세요.</b></li>
+          <li>물체가 움직이는 면과 카메라가 <b>나란하도록</b> 옆에서 찍으세요.</li>
+          <li>배경과 <b>뚜렷하게 구분되는 색의 공</b>을 쓰세요.</li>
+          <li>길이를 아는 물건(자 등)을 <b>공이 움직이는 자리와 같은 거리</b>에 두세요.</li>
         </ul>
       </details>
-    </div>
-  </section>
-
-  <!-- ===================== LOADING ===================== -->
-  <section data-phase-panel="LOADING" class="panel panel-center" hidden>
-    <div class="loading-card">
-      <div class="spinner" aria-hidden="true"></div>
-      <p id="loadingMessage" class="muted">영상을 준비하고 있습니다...</p>
-    </div>
-  </section>
-
-  <!-- ===================== 캔버스 기반 작업 화면 (FPS_CONFIRM ~ REVIEW) ===================== -->
-  <section class="work-layout"
-       data-phase-panel="FPS_CONFIRM,RULER,RANGE,INIT_POINT,TRACKING,TRACK_PAUSED,REVIEW" hidden>
-
-    <div class="canvas-column">
-      <div class="canvas-wrap">
-        <video id="previewVideo" muted playsinline hidden></video>
-        <canvas id="mainCanvas"></canvas>
-        <span id="precisionBadge" class="precision-badge" hidden>정밀 프레임</span>
-      </div>
-
-      <!-- FPS_CONFIRM -->
-      <div data-phase-panel="FPS_CONFIRM" class="control-block" hidden>
-        <button id="fpsConfirmBtn" class="btn btn-primary" type="button">확인했어요</button>
-      </div>
-
-      <!-- RULER -->
-      <div data-phase-panel="RULER" class="control-block" hidden>
-        <label class="field">
-          <span>실제 길이 (m)</span>
-          <input type="number" id="rulerLengthInput" step="0.001" min="0" placeholder="예: 30cm 자라면 0.3">
-        </label>
-        <p id="rulerWarning" class="warning-text" hidden></p>
-        <button id="confirmAimBtn" class="btn btn-secondary" type="button">조준 확정</button>
-      </div>
-
-      <!-- RANGE -->
-      <div data-phase-panel="RANGE" class="control-block" hidden>
-        <label class="field">
-          <span>분석 시작 프레임</span>
-          <input type="range" id="rangeStartSlider" min="0" max="0" value="0">
-        </label>
-        <label class="field">
-          <span>분석 종료 프레임</span>
-          <input type="range" id="rangeEndSlider" min="0" max="0" value="0">
-        </label>
-      </div>
-
-      <!-- INIT_POINT -->
-      <div data-phase-panel="INIT_POINT" class="control-block" hidden>
-        <label class="field">
-          <span>물체의 질량 (kg)</span>
-          <input type="number" id="massInput" step="0.001" min="0" placeholder="0.145">
-        </label>
-        <p class="hint">그램(g) 단위라면 1000으로 나누어 입력하세요. 예: 145g → 0.145</p>
-        <button id="confirmAimBtn2" class="btn btn-secondary" type="button" onclick="document.getElementById('confirmAimBtn').click()">조준 확정</button>
-      </div>
-
-      <!-- TRACKING -->
-      <div data-phase-panel="TRACKING" class="control-block" hidden>
-        <button id="startTrackingBtn" class="btn btn-primary" type="button">추적 시작</button>
-        <button id="stopTrackingBtn" class="btn btn-ghost" type="button">중단</button>
-        <p id="trackProgress" class="muted">0 / 0 프레임</p>
-      </div>
-
-      <!-- TRACK_PAUSED -->
-      <div data-phase-panel="TRACK_PAUSED" class="control-block" hidden>
-        <button id="confirmAimBtn3" class="btn btn-secondary" type="button" onclick="document.getElementById('confirmAimBtn').click()">이 위치로 확정</button>
-      </div>
-
-      <!-- 공통 다음 단계 버튼 -->
-      <div data-phase-panel="FPS_CONFIRM,RULER,RANGE,INIT_POINT" class="control-block" hidden>
-        <button id="advanceBtn" class="btn btn-primary" type="button">다음 단계</button>
-      </div>
+      <div id="compatWarn" class="warn hidden"></div>
     </div>
 
-    <!-- REVIEW 표(캔버스는 위 canvas-column의 mainCanvas를 그대로 공유) -->
-    <aside data-phase-panel="REVIEW" class="review-table-wrap" hidden>
-      <table class="review-table">
-        <thead><tr><th>프레임</th><th>시간(s)</th><th>x(m)</th><th>y(m)</th><th>수정</th></tr></thead>
-        <tbody id="reviewTableBody"></tbody>
-      </table>
-      <div class="review-actions">
-        <button id="retrackFromRowBtn" class="btn btn-ghost" type="button">이 프레임부터 다시 추적</button>
-        <button id="undoBtn" class="btn btn-ghost" type="button">되돌리기</button>
-        <button id="toAnalyzeBtn" class="btn btn-primary" type="button">분석 시작</button>
-      </div>
-    </aside>
+    <!-- 2단계: 로딩 -->
+    <div class="panel hidden" id="p-loading">
+      <h2>2. 영상 읽는 중</h2>
+      <div class="progress"><div id="loadBar" class="progress-fill"></div></div>
+      <p id="loadMsg" class="hint">영상을 읽고 있습니다…</p>
+    </div>
 
-  </section>
-
-  <!-- ===================== ANALYZE ===================== -->
-  <section data-phase-panel="ANALYZE" class="analyze-layout" hidden>
-    <div class="analyze-canvas-col">
-      <div class="canvas-wrap">
-        <canvas id="analyzeCanvas"></canvas>
-      </div>
-      <label class="field">
-        <span>프레임</span>
-        <input type="range" id="analyzeSlider" min="0" max="0" value="0">
+    <!-- 3단계: FPS 확인 -->
+    <div class="panel hidden" id="p-fps">
+      <h2>3. 프레임 확인</h2>
+      <p id="fpsText" class="big-read">—</p>
+      <p class="hint">아래 칸은 화면에 보여주기 위한 값입니다. 계산에는 영상에 기록된 진짜 시간을 씁니다.</p>
+      <label class="field"><span>화면에 표시할 프레임/초</span>
+        <input type="number" id="fpsInput" step="0.01" min="1">
       </label>
-      <p class="legend-caption">빨간 점 = 실제 측정, 파란 선 = 이론</p>
+      <div id="vfrNote" class="info hidden"></div>
+      <div id="lengthNote" class="warn hidden"></div>
+      <button id="fpsNext" class="btn primary block" type="button">확인</button>
     </div>
 
-    <aside class="analyze-controls-col">
-      <fieldset class="option-group">
+    <!-- 4단계: 기준자 -->
+    <div class="panel hidden" id="p-ruler">
+      <h2>4. 기준자 설정</h2>
+      <ol class="steps">
+        <li>길이를 아는 물건의 <b>한쪽 끝</b>을 조준하고 확인을 누르세요.</li>
+        <li><b>반대쪽 끝</b>을 조준하고 확인을 누르세요.</li>
+        <li>그 물건의 <b>실제 길이</b>를 미터로 적으세요.</li>
+      </ol>
+      <label class="field"><span>실제 길이 (m)</span>
+        <input type="number" id="rulerLen" step="0.001" min="0" placeholder="0.3">
+      </label>
+      <p class="hint">예: 30cm 자라면 <b>0.3</b>을 입력</p>
+      <div id="rulerPx" class="kv hidden"></div>
+      <div id="rulerWarn" class="warn hidden"></div>
+      <button id="rulerReset" class="btn block" type="button">기준자 다시 그리기</button>
+      <button id="rulerNext" class="btn primary block" type="button" disabled>다음</button>
+    </div>
+
+    <!-- 5단계: 구간 -->
+    <div class="panel hidden" id="p-range">
+      <h2>5. 분석 구간 고르기</h2>
+      <label class="field"><span>분석 시작 <b id="startLabel">0</b></span>
+        <input type="range" id="startRange" min="0" max="1" value="0">
+      </label>
+      <label class="field"><span>분석 종료 <b id="endLabel">0</b></span>
+        <input type="range" id="endRange" min="0" max="1" value="1">
+      </label>
+      <p class="hint">공이 손에서 떠난 순간부터, 바닥에 닿기 직전까지를 고르면 좋습니다.</p>
+      <div id="rangeWarn" class="warn hidden"></div>
+      <button id="rangeNext" class="btn primary block" type="button" disabled>이 구간으로 준비하기</button>
+    </div>
+
+    <!-- 6단계: 질량 + 초기 위치 -->
+    <div class="panel hidden" id="p-init">
+      <h2>6. 무게와 공 위치</h2>
+      <label class="field"><span>물체의 질량 (kg)</span>
+        <input type="number" id="massInput" step="0.001" min="0" placeholder="0.145">
+      </label>
+      <p class="hint">그램(g) 단위라면 1000으로 나누어 입력하세요. 예: 145g → 0.145</p>
+      <p class="hint">공의 한가운데를 조준해 확인을 누른 뒤, 나타나는 네모의 모서리를 끌어 <b>공은 다 들어가고 배경은 최대한 적게</b> 담기도록 맞추세요.</p>
+      <div id="boxInfo" class="kv hidden"></div>
+      <button id="initReset" class="btn block" type="button">공 위치 다시 찍기</button>
+      <button id="initNext" class="btn primary block" type="button" disabled>추적 준비 완료</button>
+    </div>
+
+    <!-- 7단계: 추적 -->
+    <div class="panel hidden" id="p-track">
+      <h2>7. 자동 추적</h2>
+      <button id="trackStart" class="btn primary block" type="button">추적 시작</button>
+      <div class="progress"><div id="trackBar" class="progress-fill"></div></div>
+      <p id="trackCount" class="hint">0 / 0 프레임</p>
+      <div id="trackPaused" class="warn hidden">공을 놓쳤습니다. 화면에서 공의 한가운데를 조준하고 확인을 누르세요.</div>
+      <button id="trackAbort" class="btn block hidden" type="button">중단</button>
+    </div>
+
+    <!-- 8단계: 표 검토 -->
+    <div class="panel hidden" id="p-review">
+      <h2>8. 데이터 확인</h2>
+      <p class="hint">이상해 보이는 줄이 있으면 ✏️ 를 눌러 공의 올바른 위치를 다시 찍으세요.</p>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>프레임</th><th>시간(s)</th><th>x(m)</th><th>y(m)</th><th>수정</th></tr></thead>
+          <tbody id="dataBody"></tbody>
+        </table>
+      </div>
+      <div id="reviewActions" class="row hidden">
+        <button id="retrackFrom" class="btn" type="button">이 프레임부터 다시 추적</button>
+        <button id="undoBtn" class="btn" type="button" disabled>되돌리기</button>
+      </div>
+      <button id="toAnalyze" class="btn primary block" type="button">분석 시작</button>
+    </div>
+
+    <!-- 9단계: 분석 -->
+    <div class="panel hidden" id="p-analyze">
+      <h2>9. 에너지 살펴보기</h2>
+
+      <div class="field">
+        <span>보여줄 프레임</span>
+        <input type="range" id="analyzeRange" min="0" max="1" value="0">
+        <b id="analyzeLabel">—</b>
+      </div>
+
+      <fieldset class="opts">
         <legend>에너지 종류</legend>
         <label><input type="radio" name="energyType" value="KE"> 운동 에너지</label>
         <label><input type="radio" name="energyType" value="PE"> 위치 에너지</label>
         <label><input type="radio" name="energyType" value="BOTH" checked> 운동 + 위치 에너지</label>
       </fieldset>
 
-      <fieldset class="option-group">
+      <fieldset class="opts">
         <legend>데이터 종류</legend>
-        <label><input type="radio" name="dataType" id="dataTypeTheory" value="THEORY"> 이론</label>
-        <label><input type="radio" name="dataType" value="REAL" checked> 현실</label>
+        <label><input type="radio" name="dataType" value="THEORY" checked> 이론</label>
+        <label><input type="radio" name="dataType" value="REAL"> 현실</label>
       </fieldset>
 
-      <div id="gWarningBox" class="g-warning" hidden></div>
-
-      <div class="chart-block">
-        <canvas id="energyBarCanvas" width="480" height="120"></canvas>
-        <canvas id="energyLineCanvas" width="480" height="180"></canvas>
-        <div id="legendContainer" class="legend-row"></div>
-      </div>
-
-      <fieldset class="option-group">
+      <fieldset class="opts">
         <legend>부가 설정</legend>
-        <label><input type="checkbox" id="smoothingCheckbox"> 데이터 부드럽게 하기</label>
-        <label class="field">
-          <span>질량 (kg)</span>
-          <input type="number" id="massReinput" step="0.001" min="0">
-        </label>
+        <label><input type="checkbox" id="smoothChk"> 데이터 부드럽게 하기</label>
+        <label class="field inline"><span>질량 (kg)</span><input type="number" id="massInput2" step="0.001" min="0"></label>
+        <label class="field"><span>기준면 내리기</span><input type="range" id="baseRange" min="0" max="100" value="0"></label>
       </fieldset>
 
-      <div class="analyze-actions">
-        <button id="backToReviewBtn" class="btn btn-ghost" type="button">데이터 수정하기</button>
-        <button id="downloadCsvBtn" class="btn btn-primary" type="button">데이터 받기 (CSV)</button>
-      </div>
-    </aside>
-  </section>
+      <div id="physWarn" class="warn hidden"></div>
 
+      <canvas id="barChart" class="chart" width="720" height="200"></canvas>
+      <canvas id="lineChart" class="chart" width="720" height="300"></canvas>
+      <div class="chart-legend">
+        <span class="key"><i class="sw ke"></i>운동 에너지</span>
+        <span class="key"><i class="sw pe"></i>위치 에너지</span>
+        <span class="key"><i class="sw me"></i>역학적 에너지(합)</span>
+      </div>
+
+      <div class="row">
+        <button id="backToReview" class="btn" type="button">데이터 수정하기</button>
+        <button id="downloadCsv" class="btn primary" type="button">데이터 받기</button>
+      </div>
+    </div>
+
+    <button id="restartBtn" class="btn ghost block hidden" type="button">새 영상으로 처음부터</button>
+  </section>
 </main>
 
 <script type="module" src="js/main.js"></script>

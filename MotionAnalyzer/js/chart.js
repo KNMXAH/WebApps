@@ -1,129 +1,146 @@
-// chart.js — 외부 차트 라이브러리 없이 Canvas 2D로 직접 구현 (§13)
-// 색맹 학생도 구분 가능하도록 파랑(KE)/주황(PE) 조합을 쓰고, 색상만으로 구분하지 않는다(범례 병기).
+// chart.js — 에너지 막대그래프, 꺾은선 그래프 (외부 라이브러리 없음)
+// 색은 색맹 학생도 구분 가능한 파랑/주황 조합. 빨강-초록은 쓰지 않는다(§13.5).
 
-export const KE_COLOR = '#2E6FEE';
-export const PE_COLOR = '#E8871E';
-export const E_LINE_COLOR = '#16202A';
+export const COLOR = {
+  KE: '#4da3ff',
+  PE: '#ff8a3d',
+  E: '#e8edf6',
+  grid: '#2c3850',
+  text: '#9fb0c9',
+  bright: '#e8edf6'
+};
+
+const FONT = '13px system-ui, -apple-system, sans-serif';
+
+function prepare(canvas, cssHeight) {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const cssWidth = canvas.clientWidth || canvas.width;
+  canvas.width = Math.round(cssWidth * dpr);
+  canvas.height = Math.round(cssHeight * dpr);
+  canvas.style.height = cssHeight + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+  return { ctx, w: cssWidth, h: cssHeight };
+}
+
+const fmt = (v) => v.toFixed(3) + ' J';
 
 /**
- * §13.1~13.3 가로 막대그래프.
- * energyType: 'KE' | 'PE' | 'BOTH'
- * point: { KE, PE, E }
- * axisMax: §13.2 고정 상한(전체 구간 최대 E * 1.05), 프레임/옵션 변경에도 불변
+ * 가로 막대그래프. 가로축이 에너지, 세로축에는 의미가 없다(§13.1).
+ * @param {Object} o {energyType:'KE'|'PE'|'BOTH', KE, PE, axisMax, label}
  */
-export function drawEnergyBar(canvas, point, energyType, axisMax) {
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width, h = canvas.height;
-  ctx.clearRect(0, 0, w, h);
-  if (!point || !axisMax) return;
+export function drawBars(canvas, o) {
+  const H = o.energyType === 'BOTH' ? 150 : 120;
+  const { ctx, w, h } = prepare(canvas, H);
+  const padL = 12, padR = 12, padT = 26;
+  const barH = 46;
+  const plotW = w - padL - padR;
+  const max = o.axisMax > 0 ? o.axisMax : 1;
+  const toW = (v) => Math.max(0, Math.min(v / max, 1)) * plotW;
 
-  const marginLeft = 8, marginRight = 90;
-  const barAreaW = w - marginLeft - marginRight;
-  const barH = energyType === 'BOTH' ? 40 : 48;
-  const barY = energyType === 'BOTH' ? h / 2 - barH / 2 - 14 : h / 2 - barH / 2;
-
-  const scaleX = (val) => (val / axisMax) * barAreaW;
-
-  function drawSegment(x0, value, color, label) {
-    const segW = scaleX(value);
-    ctx.fillStyle = color;
-    ctx.fillRect(marginLeft + x0, barY, segW, barH);
-    const text = `${value.toFixed(3)} J`;
-    ctx.font = '600 13px Pretendard, sans-serif';
-    const textW = ctx.measureText(text).width;
-    if (textW + 10 < segW) {
-      ctx.fillStyle = '#fff';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(text, marginLeft + x0 + segW / 2 - textW / 2, barY + barH / 2);
-    } else {
-      ctx.fillStyle = '#16202A';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(text, marginLeft + x0 + segW + 6, barY + barH / 2);
-    }
-    return segW;
-  }
+  ctx.font = FONT;
+  ctx.fillStyle = COLOR.text;
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(o.label || '', padL, 16);
 
   // 축 배경
-  ctx.fillStyle = '#EEF1F5';
-  ctx.fillRect(marginLeft, barY, barAreaW, barH);
+  ctx.fillStyle = 'rgba(255,255,255,.05)';
+  ctx.fillRect(padL, padT, plotW, barH);
 
-  if (energyType === 'KE') {
-    drawSegment(0, point.KE, KE_COLOR, '운동에너지');
-  } else if (energyType === 'PE') {
-    drawSegment(0, point.PE, PE_COLOR, '위치에너지');
-  } else {
-    const keW = drawSegment(0, point.KE, KE_COLOR);
-    drawSegment(keW, point.PE, PE_COLOR);
-    // 역학적에너지 합계 표기
-    ctx.fillStyle = '#16202A';
-    ctx.font = '700 14px Pretendard, sans-serif';
-    ctx.textBaseline = 'alphabetic';
-    ctx.fillText(`역학적 에너지: ${point.E.toFixed(3)} J`, marginLeft, barY + barH + 26);
+  const segs = [];
+  if (o.energyType === 'KE') segs.push({ v: o.KE, c: COLOR.KE, name: '운동' });
+  else if (o.energyType === 'PE') segs.push({ v: o.PE, c: COLOR.PE, name: '위치' });
+  else { segs.push({ v: o.KE, c: COLOR.KE, name: '운동' }); segs.push({ v: o.PE, c: COLOR.PE, name: '위치' }); }
+
+  let x = padL;
+  for (const s of segs) {
+    const bw = toW(s.v);
+    ctx.fillStyle = s.c;
+    ctx.fillRect(x, padT, bw, barH);
+
+    const text = fmt(s.v);
+    const tw = ctx.measureText(text).width;
+    ctx.textBaseline = 'middle';
+    if (bw > tw + 16) {                       // 막대 안에 넣을 수 있을 때
+      ctx.fillStyle = '#08131f';
+      ctx.fillText(text, x + 8, padT + barH / 2);
+    } else {                                   // 짧으면 바깥 오른쪽에
+      ctx.fillStyle = s.c;
+      ctx.fillText(text, Math.min(x + bw + 6, w - tw - 4), padT + barH / 2);
+    }
+    x += bw;
+  }
+
+  // 축 눈금 (0 과 상한)
+  ctx.strokeStyle = COLOR.grid; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(padL, padT + barH + 1); ctx.lineTo(padL + plotW, padT + barH + 1); ctx.stroke();
+  ctx.fillStyle = COLOR.text; ctx.textBaseline = 'top';
+  ctx.fillText('0', padL, padT + barH + 6);
+  const maxLabel = max.toFixed(3) + ' J';
+  ctx.fillText(maxLabel, padL + plotW - ctx.measureText(maxLabel).width, padT + barH + 6);
+
+  if (o.energyType === 'BOTH') {
+    ctx.fillStyle = COLOR.bright;
+    ctx.font = 'bold 15px system-ui, sans-serif';
+    ctx.fillText('역학적 에너지: ' + fmt(o.KE + o.PE), padL, padT + barH + 26);
   }
 }
 
 /**
- * §13.4 꺾은선 그래프: KE, PE, E 세 개 선. x축=시간, y축 상한은 막대와 동일.
- * series: [{t, KE, PE, E}], currentT: 세로 표시선 위치
+ * 시간-에너지 꺾은선. 세로축 상한은 막대그래프와 같은 값을 쓴다(§13.4).
+ * @param {Object} o {rows:[{t,KE,PE,E}], axisMax, currentIndex}
  */
-export function drawEnergyLineChart(canvas, series, axisMax, currentT) {
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width, h = canvas.height;
-  ctx.clearRect(0, 0, w, h);
-  if (!series || series.length < 2) return;
+export function drawLines(canvas, o) {
+  const { ctx, w, h } = prepare(canvas, 260);
+  const padL = 48, padR = 14, padT = 14, padB = 34;
+  const plotW = w - padL - padR, plotH = h - padT - padB;
+  const rows = o.rows || [];
+  if (rows.length < 2) return;
 
-  const margin = { top: 16, right: 16, bottom: 30, left: 46 };
-  const plotW = w - margin.left - margin.right;
-  const plotH = h - margin.top - margin.bottom;
+  const tMin = rows[0].t, tMax = rows[rows.length - 1].t;
+  const span = Math.max(tMax - tMin, 1e-6);
+  const max = o.axisMax > 0 ? o.axisMax : 1;
+  const X = (t) => padL + (t - tMin) / span * plotW;
+  const Y = (v) => padT + plotH - Math.max(0, Math.min(v / max, 1)) * plotH;
 
-  const tMin = series[0].t, tMax = series[series.length - 1].t;
-  const xOf = (t) => margin.left + ((t - tMin) / (tMax - tMin || 1)) * plotW;
-  const yOf = (v) => margin.top + plotH - (v / axisMax) * plotH;
+  ctx.font = FONT;
 
-  // 축
-  ctx.strokeStyle = '#C7CFD8';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(margin.left, margin.top);
-  ctx.lineTo(margin.left, margin.top + plotH);
-  ctx.lineTo(margin.left + plotW, margin.top + plotH);
-  ctx.stroke();
-
-  ctx.fillStyle = '#5C6B7A';
-  ctx.font = '11px Pretendard, sans-serif';
-  ctx.fillText('0', margin.left - 14, margin.top + plotH + 4);
-  ctx.fillText(axisMax.toFixed(2) + 'J', 2, margin.top + 8);
-  ctx.fillText(tMax.toFixed(2) + 's', margin.left + plotW - 24, margin.top + plotH + 20);
-
-  function drawLine(key, color) {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    series.forEach((p, i) => {
-      const x = xOf(p.t), y = yOf(p[key]);
-      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-    });
-    ctx.stroke();
+  // 눈금
+  ctx.strokeStyle = COLOR.grid; ctx.lineWidth = 1; ctx.fillStyle = COLOR.text;
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i <= 4; i++) {
+    const v = max * i / 4, y = Y(v);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+    const lab = v.toFixed(2);
+    ctx.fillText(lab, padL - 8 - ctx.measureText(lab).width, y);
   }
-  drawLine('KE', KE_COLOR);
-  drawLine('PE', PE_COLOR);
-  drawLine('E', E_LINE_COLOR);
+  ctx.textBaseline = 'top';
+  ctx.fillText(tMin.toFixed(2) + ' 초', padL, padT + plotH + 8);
+  const tl = tMax.toFixed(2) + ' 초';
+  ctx.fillText(tl, padL + plotW - ctx.measureText(tl).width, padT + plotH + 8);
 
-  if (currentT != null) {
-    const x = xOf(currentT);
-    ctx.strokeStyle = '#8A97A6';
-    ctx.setLineDash([4, 3]);
+  const line = (key, color, width) => {
+    ctx.strokeStyle = color; ctx.lineWidth = width;
     ctx.beginPath();
-    ctx.moveTo(x, margin.top);
-    ctx.lineTo(x, margin.top + plotH);
+    rows.forEach((r, i) => { const x = X(r.t), y = Y(r[key]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
     ctx.stroke();
+  };
+  line('KE', COLOR.KE, 2);
+  line('PE', COLOR.PE, 2);
+  line('E', COLOR.E, 2.5);
+
+  // 현재 프레임 세로 표시선
+  const ci = o.currentIndex;
+  if (ci >= 0 && ci < rows.length) {
+    const x = X(rows[ci].t);
+    ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
     ctx.setLineDash([]);
+    for (const [key, color] of [['KE', COLOR.KE], ['PE', COLOR.PE], ['E', COLOR.E]]) {
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(x, Y(rows[ci][key]), 3.5, 0, Math.PI * 2); ctx.fill();
+    }
   }
 }
-
-/** 범례를 별도 DOM에 그리기 위한 텍스트/색 메타 (색상만으로 구분하지 않기 위함) */
-export const LEGEND = [
-  { label: '운동에너지', color: KE_COLOR },
-  { label: '위치에너지', color: PE_COLOR },
-  { label: '역학적에너지', color: E_LINE_COLOR }
-];

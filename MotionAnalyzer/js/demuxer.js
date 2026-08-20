@@ -1,123 +1,158 @@
-// demuxer.js — mp4box.js 래핑, 프레임 인덱스(유일한 시간 기준) 구축
-// 워커/메인 스레드 어디서든 사용할 수 있도록 DOM에 의존하지 않는다.
-// mp4box.js는 전역(self.MP4Box)으로 로드되어 있어야 한다.
+// demuxer.js — mp4box.js 래핑, 프레임 인덱스 구축
+// 메인 스레드에서 1회만 수행한다. (mp4box 는 UMD 라 모듈 워커에서 안전하게 import 되지 않는다.)
+
+let mp4boxLoaded = null;
+
+function loadMp4Box() {
+  if (mp4boxLoaded) return mp4boxLoaded;
+  mp4boxLoaded = new Promise((resolve, reject) => {
+    if (globalThis.MP4Box) return resolve(globalThis.MP4Box);
+    const s = document.createElement('script');
+    s.src = new URL('../vendor/mp4box.all.min.js', import.meta.url).href;
+    s.onload = () => globalThis.MP4Box
+      ? resolve(globalThis.MP4Box)
+      : reject(new Error('mp4box.js 를 불러왔지만 MP4Box 전역이 없습니다.'));
+    s.onerror = () => reject(new Error('mp4box.js 를 불러오지 못했습니다.'));
+    document.head.appendChild(s);
+  });
+  return mp4boxLoaded;
+}
+
+/** avcC / hvcC / vpcC / av1C 박스를 꺼내 VideoDecoder description 으로 만든다. */
+function extractDescription(MP4Box, file, trackId) {
+  const trak = file.getTrackById(trackId);
+  if (!trak) return null;
+  const entries = trak.mdia?.minf?.stbl?.stsd?.entries || [];
+  for (const entry of entries) {
+    const box = entry.avcC || entry.hvcC || entry.vpcC || entry.av1C;
+    if (!box) continue;
+    const stream = new MP4Box.DataStream(undefined, 0, MP4Box.DataStream.BIG_ENDIAN);
+    box.write(stream);
+    // 앞 8바이트는 박스 헤더(size + type)이므로 잘라낸다.
+    return new Uint8Array(stream.buffer, 8);
+  }
+  return null;
+}
 
 /**
- * ArrayBuffer를 파싱하여 { videoTrack, frameIndex, codecString, description, samplesGetter } 반환.
- * 파싱 실패(=ISO BMFF가 아니거나 손상) 시 reject한다 (트랙 B/C 판정용).
+ * 파일 전체를 파싱해 디코딩에 필요한 모든 것을 만든다.
+ * @returns {Promise<{config, frameIndex, samples, srcWidth, srcHeight, duration}>}
  */
-export function parseWithMp4Box(arrayBuffer) {
-  return new Promise((resolve, reject) => {
-    if (typeof MP4Box === 'undefined') {
-      reject(new Error('mp4box.js가 로드되지 않았습니다.'));
-      return;
-    }
-    const mp4boxfile = MP4Box.createFile();
-    let resolved = false;
+export async function demux(arrayBuffer) {
+  const MP4Box = await loadMp4Box();
 
-    mp4boxfile.onError = (e) => {
-      if (!resolved) { resolved = true; reject(new Error('mp4box 파싱 실패: ' + e)); }
-    };
-
-    const sampleStore = []; // 트랙의 전체 샘플(디코딩용 데이터 포함)
-
-    mp4boxfile.onReady = (info) => {
-      const vTrack = info.tracks.find(t => t.type === 'video' || t.video);
-      if (!vTrack) {
-        if (!resolved) { resolved = true; reject(new Error('비디오 트랙을 찾을 수 없습니다.')); }
-        return;
-      }
-
-      // 코덱 description(avcC/hvcC) 추출
-      // 주의: mp4box.all.min.js 번들에서 DataStream은 MP4Box.DataStream이 아니라
-      // 전역 DataStream으로 노출된다(버전에 따라 다를 수 있어 둘 다 시도한다).
-      // MP4의 avcC/hvcC 샘플은 AVCC(length-prefixed) 형식이라 description 없이
-      // VideoDecoder.decode()에 넣으면 반드시 실패한다 — 절대 조용히 넘어가지 않는다.
-      let description;
-      const DS = (typeof DataStream !== 'undefined') ? DataStream
-                : (typeof MP4Box !== 'undefined' && MP4Box.DataStream) ? MP4Box.DataStream
-                : null;
-      try {
-        if (!DS) throw new Error('DataStream을 찾을 수 없습니다 (mp4box.js 번들 확인 필요)');
-        const trak = mp4boxfile.getTrackById(vTrack.id);
-        const entry = trak.mdia.minf.stbl.stsd.entries[0];
-        const box = entry.avcC || entry.hvcC || entry.vpcC || entry.av1C;
-        if (!box) throw new Error('avcC/hvcC/vpcC/av1C 박스를 찾을 수 없습니다');
-        const stream = new DS(undefined, 0, DS.BIG_ENDIAN);
-        box.write(stream);
-        description = new Uint8Array(stream.buffer, 8); // 박스 헤더(8바이트) 제외
-      } catch (e) {
-        console.warn('[demuxer] codec description 추출 실패 — 이 트랙은 직접 디코딩할 수 없습니다:', e.message);
-        description = undefined;
-      }
-
-      // 전체 샘플을 추출하도록 설정
-      mp4boxfile.setExtractionOptions(vTrack.id, null, { nbSamples: 100000 });
-
-      mp4boxfile.onSamples = (id, user, samples) => {
-        for (const s of samples) sampleStore.push(s);
-      };
-
-      mp4boxfile.start();
-
-      // extraction은 비동기이므로 flush 이후 완료를 감지
-      const finalize = () => {
-        if (resolved) return;
-        resolved = true;
-
-        sampleStore.sort((a, b) => a.cts - b.cts);
-
-        const frameIndex = sampleStore.map((s, idx) => ({
-          index: idx,
-          cts: s.cts,
-          timescale: s.timescale,
-          t: s.cts / s.timescale,
-          isKey: !!s.is_sync
-        }));
-
-        resolve({
-          videoTrack: vTrack,
-          codecString: vTrack.codec,
-          description,
-          frameIndex,
-          getSampleData: (idx) => sampleStore[idx] ? sampleStore[idx].data : null,
-          getSampleDuration: (idx) => {
-            const s = sampleStore[idx];
-            return s ? (s.duration / s.timescale) : 0;
-          },
-          durationSec: vTrack.duration && vTrack.timescale ? vTrack.duration / vTrack.timescale : 0,
-          width: vTrack.video ? vTrack.video.width : vTrack.track_width,
-          height: vTrack.video ? vTrack.video.height : vTrack.track_height
-        });
-      };
-
-      // mp4box는 스트리밍 파서라 flush 후 짧은 지연을 두고 완료로 간주한다.
-      mp4boxfile.flush();
-      setTimeout(finalize, 30);
-    };
-
-    arrayBuffer.fileStart = 0;
-    mp4boxfile.appendBuffer(arrayBuffer);
-    mp4boxfile.flush();
+  const file = MP4Box.createFile();
+  const info = await new Promise((resolve, reject) => {
+    file.onError = (e) => reject(new Error('영상 컨테이너를 읽지 못했습니다: ' + e));
+    file.onReady = (i) => resolve(i);
+    const buf = arrayBuffer.slice(0); // mp4box 가 소유권을 가져가므로 복사본을 넘긴다
+    buf.fileStart = 0;
+    file.appendBuffer(buf);
+    file.flush();
+    // onReady 가 끝내 호출되지 않으면 실패로 본다
+    setTimeout(() => reject(new Error('영상 컨테이너를 읽지 못했습니다(시간 초과).')), 15000);
   });
+
+  const vtrack = (info.videoTracks || [])[0];
+  if (!vtrack) throw new Error('이 파일에는 영상 트랙이 없습니다.');
+
+  const description = extractDescription(MP4Box, file, vtrack.id);
+
+  // 샘플 전체 추출
+  const rawSamples = await new Promise((resolve, reject) => {
+    const acc = [];
+    file.onSamples = (_id, _user, samples) => {
+      for (const s of samples) {
+        acc.push({
+          cts: s.cts, dts: s.dts, timescale: s.timescale,
+          isKey: !!s.is_sync, data: s.data
+        });
+      }
+    };
+    file.onError = (e) => reject(new Error('샘플을 읽지 못했습니다: ' + e));
+    file.setExtractionOptions(vtrack.id, null, { nbSamples: Number.MAX_SAFE_INTEGER });
+    file.start();
+    file.flush();
+    // onSamples 는 동기적으로 이미 호출되었다
+    setTimeout(() => acc.length ? resolve(acc) : reject(new Error('영상에서 프레임을 찾지 못했습니다.')), 0);
+  });
+
+  file.stop();
+  file.flush();
+
+  // ---- 디코딩 순서(=파일 순서) 자료 만들기 ----
+  const n = rawSamples.length;
+  const offsets = new Int32Array(n + 1);
+  let total = 0;
+  for (let i = 0; i < n; i++) { offsets[i] = total; total += rawSamples[i].data.byteLength; }
+  offsets[n] = total;
+
+  const bytes = new Uint8Array(total);
+  const ctsUs = new Float64Array(n);
+  const isKey = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const s = rawSamples[i];
+    bytes.set(s.data, offsets[i]);
+    ctsUs[i] = Math.round(s.cts * 1e6 / s.timescale);
+    isKey[i] = s.isKey ? 1 : 0;
+    s.data = null; // 참조 해제
+  }
+
+  // ---- 표시(composition) 순서로 정렬한 프레임 인덱스 ----
+  const order = Array.from({ length: n }, (_, i) => i)
+    .sort((a, b) => ctsUs[a] - ctsUs[b] || a - b);
+
+  const frameIndex = order.map((decodeIndex, k) => {
+    const s = rawSamples[decodeIndex];
+    return {
+      index: k,
+      cts: s.cts,
+      timescale: s.timescale,
+      t: s.cts / s.timescale,
+      isKey: !!s.isKey,
+      decodeIndex
+    };
+  });
+
+  if (frameIndex.length < 2) throw new Error('프레임이 너무 적어 분석할 수 없습니다.');
+
+  const codec = vtrack.codec;
+  const srcWidth = vtrack.video?.width || vtrack.track_width || info.videoTracks[0].track_width;
+  const srcHeight = vtrack.video?.height || vtrack.track_height || info.videoTracks[0].track_height;
+  const duration = frameIndex[frameIndex.length - 1].t - frameIndex[0].t;
+
+  return {
+    config: {
+      codec,
+      codedWidth: Math.round(srcWidth),
+      codedHeight: Math.round(srcHeight),
+      ...(description ? { description } : {})
+    },
+    frameIndex,
+    samples: { buffer: bytes.buffer, offsets, ctsUs, isKey },
+    srcWidth: Math.round(srcWidth),
+    srcHeight: Math.round(srcHeight),
+    duration
+  };
 }
 
-/** 추정 FPS = (프레임 수 − 1) / (마지막 t − 첫 t) */
+/** §4.4 FPS 자동 추정 — 표시 전용. */
 export function estimateFps(frameIndex) {
-  if (frameIndex.length < 2) return 0;
-  const first = frameIndex[0].t;
-  const last = frameIndex[frameIndex.length - 1].t;
-  if (last <= first) return 0;
-  return (frameIndex.length - 1) / (last - first);
+  const n = frameIndex.length;
+  if (n < 2) return 0;
+  const span = frameIndex[n - 1].t - frameIndex[0].t;
+  if (span <= 0) return 0;
+  return (n - 1) / span;
 }
 
-/** 프레임 간격 편차(%) — 5% 이상이면 VFR 안내 문구를 띄운다 */
-export function frameIntervalDeviationPct(frameIndex) {
-  if (frameIndex.length < 3) return 0;
-  const deltas = [];
-  for (let i = 1; i < frameIndex.length; i++) deltas.push(frameIndex[i].t - frameIndex[i - 1].t);
-  const mean = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+/** 프레임 간격의 상대 표준편차. 5% 이상이면 VFR 로 본다. */
+export function frameIntervalDeviation(frameIndex) {
+  const n = frameIndex.length;
+  if (n < 3) return 0;
+  const d = [];
+  for (let i = 1; i < n; i++) d.push(frameIndex[i].t - frameIndex[i - 1].t);
+  const mean = d.reduce((a, b) => a + b, 0) / d.length;
   if (mean <= 0) return 0;
-  const maxDev = Math.max(...deltas.map(d => Math.abs(d - mean)));
-  return (maxDev / mean) * 100;
+  const varr = d.reduce((a, b) => a + (b - mean) ** 2, 0) / d.length;
+  return Math.sqrt(varr) / mean;
 }

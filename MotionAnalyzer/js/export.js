@@ -1,60 +1,86 @@
-// export.js — CSV 내보내기 (§14). UTF-8 BOM 필수, 실측/이론을 한 파일에 나란히 배치.
+// export.js — CSV 생성 및 다운로드(§14)
+// 평활화가 켜져 있어도 CSV 에는 언제나 원자료를 기록한다.
 
-function fmt(n, digits = 6) {
-  return (n === null || n === undefined || Number.isNaN(n)) ? '' : n.toFixed(digits);
+import { computePhysics } from './physics.js';
+
+const n6 = (v) => (v == null || !isFinite(v)) ? '' : v.toFixed(6);
+
+function stamp(d = new Date()) {
+  const p = (x) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
 }
 
-export function buildCsv(appState, physics) {
-  const { video, ruler, range, object, view } = appState;
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+export function buildCsv(state) {
+  const s = state;
+  // 평활화 여부와 무관하게 원자료로 다시 계산한다
+  const raw = computePhysics({
+    data: s.track.data,
+    scale: s.ruler.scale,
+    mass: s.object.mass,
+    analysisHeight: s.video.analysisHeight,
+    smoothing: false,
+    baselineDrop: s.view.baselineDrop
+  });
+  if (!raw) return null;
 
-  const meta = [
-    `# 파일명, 분석일시: motion_analysis_${stamp}.csv, ${now.toISOString()}`,
-    `# 추정 FPS, 분석 시작 프레임, 분석 종료 프레임: ${fmt(video.estimatedFps, 2)}, ${range.startFrame}, ${range.endFrame}`,
-    `# 기준자 픽셀 길이, 기준자 실제 길이(m), 픽셀 배율(m/px): ${fmt(ruler.pxLength, 3)}, ${fmt(ruler.realLength, 4)}, ${fmt(ruler.scale, 8)}`,
-    `# 질량(kg): ${fmt(object.mass, 4)}`,
-    `# 회귀 계수 c0, c1, b0, b1, b2: ${fmt(physics.fit.c0)}, ${fmt(physics.fit.c1)}, ${fmt(physics.fit.b0)}, ${fmt(physics.fit.b1)}, ${fmt(physics.fit.b2)}`,
-    `# 중력가속도 g (m/s^2): ${fmt(physics.g, 4)}`,
-    `# 위치에너지 기준면 y0: ${fmt(physics.y0, 4)}`,
-    `# 평활화 사용 여부: ${view.smoothing ? 1 : 0}`
-  ];
+  const rulerPx = Math.hypot(s.ruler.p2.x - s.ruler.p1.x, s.ruler.p2.y - s.ruler.p1.y);
+  const L = [];
+  L.push(`# 파일명, ${s.video.file?.name || ''}`);
+  L.push(`# 분석일시, ${new Date().toLocaleString('ko-KR')}`);
+  L.push(`# 추정 FPS, ${s.video.estimatedFps.toFixed(2)}`);
+  L.push(`# 분석 시작 프레임, ${s.range.startFrame}`);
+  L.push(`# 분석 종료 프레임, ${s.range.endFrame}`);
+  L.push(`# 기준자 픽셀 길이, ${rulerPx.toFixed(3)}`);
+  L.push(`# 기준자 실제 길이(m), ${s.ruler.realLength}`);
+  L.push(`# 픽셀 배율(m/px), ${n6(s.ruler.scale)}`);
+  L.push(`# 질량(kg), ${s.object.mass}`);
+  L.push(`# 회귀 계수 c0, ${n6(raw.fit.c0)}`);
+  L.push(`# 회귀 계수 c1, ${n6(raw.fit.c1)}`);
+  L.push(`# 회귀 계수 b0, ${n6(raw.fit.b0)}`);
+  L.push(`# 회귀 계수 b1, ${n6(raw.fit.b1)}`);
+  L.push(`# 회귀 계수 b2, ${n6(raw.fit.b2)}`);
+  L.push(`# 회귀 기준 시간 t_bar(s) — 계수는 (t - t_bar) 기준, ${n6(raw.fit.tbar)}`);
+  L.push(`# 중력가속도 g (m/s^2), ${n6(raw.g)}`);
+  L.push(`# 위치에너지 기준면 y0, ${n6(raw.y0 - raw.baselineDrop)}`);
+  L.push(`# 평활화 사용 여부, ${s.view.smoothing ? '켬(화면 표시용, 아래 값은 원자료)' : '끔'}`);
+  L.push(`# 분석 좌표계 크기(px), ${s.video.analysisWidth}x${s.video.analysisHeight}`);
+  L.push(`# 프레임 정밀도, ${s.engine === 'webcodecs' ? '정밀(WebCodecs)' : '보통(대체 경로)'}`);
 
-  const header = [
+  L.push([
     'frame', 't(s)',
     'x_real(m)', 'y_real(m)', 'vx_real(m/s)', 'vy_real(m/s)', 'v_real(m/s)',
     'KE_real(J)', 'PE_real(J)', 'E_real(J)',
     'x_theory(m)', 'y_theory(m)', 'vx_theory(m/s)', 'vy_theory(m/s)', 'v_theory(m/s)',
     'KE_theory(J)', 'PE_theory(J)', 'E_theory(J)',
     'edited'
-  ].join(',');
+  ].join(','));
 
-  // 평활화가 켜져 있어도 CSV는 항상 원자료(rawPhysical 기반 재계산) 사용
-  const rows = physics.rawReal.map((r, i) => {
-    const th = physics.rawTheory[i];
-    return [
-      r.frame, fmt(r.t, 6),
-      fmt(r.x), fmt(r.h), fmt(r.vx), fmt(r.vy), fmt(r.v),
-      fmt(r.KE), fmt(r.PE), fmt(r.E),
-      fmt(th.x), fmt(th.h), fmt(th.vx), fmt(th.vy), fmt(th.v),
-      fmt(th.KE), fmt(th.PE), fmt(th.E),
+  for (let i = 0; i < raw.real.length; i++) {
+    const r = raw.real[i], th = raw.theory[i];
+    L.push([
+      r.frame, n6(r.t),
+      n6(r.x), n6(r.y), n6(r.vx), n6(r.vy), n6(r.v),
+      n6(r.KE), n6(r.PE), n6(r.E),
+      n6(th.x), n6(th.y), n6(th.vx), n6(th.vy), n6(th.v),
+      n6(th.KE), n6(th.PE), n6(th.E),
       r.edited ? 1 : 0
-    ].join(',');
-  });
+    ].join(','));
+  }
 
-  const csvBody = [meta.join('\n'), header, ...rows].join('\n');
-  return '\uFEFF' + csvBody;
+  return '\uFEFF' + L.join('\r\n') + '\r\n';   // UTF-8 BOM 필수
 }
 
-export function downloadCsv(csvString, filename) {
-  const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+export function downloadCsv(state) {
+  const text = buildCsv(state);
+  if (!text) return false;
+  const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = filename;
+  a.download = `motion_analysis_${stamp()}.csv`;
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
+  a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
+  return true;
 }

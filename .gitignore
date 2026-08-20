@@ -1,6 +1,7 @@
 prompt.md
 WRKS_Conversation_2026-08-18_default.html
 WRKS_Conversation_2026-08-18_default.md
-MotionAnalyzer/vendor/README.md
+**/vendor/README.md
 *.tgz
 **/*.zip
+MotionAnalyzer_old/

@@ -1,289 +1,356 @@
-// ui-collect.js — 1~7단계(업로드 ~ 검토) 화면 UI
+// ui-collect.js — 수집 화면 UI (1~8단계)
 
-import { appState, setPhase, guidanceText, canAdvance, notify, pushHistory, undoHistory } from './state.js';
-import { clientToAnalysis, drawFrame, drawRuler, drawTrackBox, drawTrajectoryPoints, drawLoupe } from './canvas.js';
+import { PHASE, guideFor, blockReason } from './state.js';
+import { drawRuler, drawBox, drawTrackPoints } from './canvas.js';
+import { computePhysics } from './physics.js';
 
-let dom = {};
-let worker = null;
-let aimPoint = null;       // "끌어서 조준 → 확정" 방식의 임시 조준점
-let dragging = null;       // 드래그 상태(기준자 끝점 / 박스 핸들 / 박스 이동)
+const $ = (id) => document.getElementById(id);
 
-export function initCollectUI(elements, workerRef) {
-  dom = elements;
-  worker = workerRef;
-  bindStaticEvents();
-}
+/* ================================================================== */
+/* 초기화                                                              */
+/* ================================================================== */
+export function initCollect(app) {
+  const s = app.state;
 
-function bindStaticEvents() {
-  dom.fileInput.addEventListener('change', onFileSelected);
-  dom.canvas.addEventListener('pointerdown', onPointerDown);
-  dom.canvas.addEventListener('pointermove', onPointerMove);
-  dom.canvas.addEventListener('pointerup', onPointerUp);
-  dom.canvas.style.touchAction = 'none';
-
-  dom.confirmBtn.addEventListener('click', onConfirmAim);
-  dom.fpsConfirmBtn.addEventListener('click', () => setPhase('RANGE'));
-  dom.rulerLengthInput.addEventListener('input', onRulerLengthInput);
-  dom.rangeStartSlider.addEventListener('input', onRangeSliderInput);
-  dom.rangeEndSlider.addEventListener('input', onRangeSliderInput);
-  dom.rangeEndSlider.addEventListener('change', onRangeSliderCommit);
-  dom.rangeStartSlider.addEventListener('change', onRangeSliderCommit);
-  dom.massInput.addEventListener('input', onMassInput);
-  dom.startTrackingBtn.addEventListener('click', onStartTracking);
-  dom.stopTrackingBtn.addEventListener('click', onStopTracking);
-  dom.toAnalyzeBtn.addEventListener('click', () => setPhase('ANALYZE'));
-  dom.retrackFromRowBtn.addEventListener('click', onRetrackFromRow);
-  dom.undoBtn.addEventListener('click', () => { if (undoHistory()) refreshReviewTable(); });
-}
-
-// ---------------- 1단계: 업로드 ----------------
-async function onFileSelected(e) {
-  const file = e.target.files[0];
-  if (!file) return;
-  appState.video.file = file;
-  notify();
-  document.dispatchEvent(new CustomEvent('app:fileChosen', { detail: { file } }));
-}
-
-// ---------------- 조준 확정(터치/마우스 공통) ----------------
-function isTouch(e) { return e.pointerType === 'touch'; }
-
-function onPointerDown(e) {
-  const p = toAnalysisPoint(e);
-  const phase = appState.phase;
-
-  if (phase === 'RULER') {
-    const hit = hitTestRulerHandle(p);
-    if (hit) { dragging = { type: 'rulerHandle', which: hit }; return; }
-    aimPoint = p;
-    renderCurrentPhase();
-    return;
-  }
-  if (phase === 'INIT_POINT') {
-    if (appState.object.initPoint) {
-      const hit = hitTestBoxHandle(p);
-      if (hit) { dragging = { type: 'boxHandle', which: hit }; return; }
-      if (hitTestBoxInside(p)) { dragging = { type: 'boxMove', start: p, origin: { ...appState.object.initPoint } }; return; }
-    }
-    aimPoint = p;
-    renderCurrentPhase();
-    return;
-  }
-  if (phase === 'TRACK_PAUSED') {
-    aimPoint = p;
-    renderCurrentPhase();
-    return;
-  }
-  if (appState.view.editingRow != null) {
-    aimPoint = p;
-    renderCurrentPhase();
-  }
-}
-
-function onPointerMove(e) {
-  const p = toAnalysisPoint(e);
-  if (dragging) {
-    if (dragging.type === 'rulerHandle') {
-      appState.ruler[dragging.which] = p;
-      renderCurrentPhase();
-    } else if (dragging.type === 'boxHandle') {
-      resizeBoxFromHandle(dragging.which, p);
-      renderCurrentPhase();
-    } else if (dragging.type === 'boxMove') {
-      const dx = p.x - dragging.start.x, dy = p.y - dragging.start.y;
-      appState.object.initPoint = { x: dragging.origin.x + dx, y: dragging.origin.y + dy };
-      renderCurrentPhase();
-    }
-    return;
-  }
-  if (['RULER', 'INIT_POINT', 'TRACK_PAUSED'].includes(appState.phase) || appState.view.editingRow != null) {
-    aimPoint = p;
-    renderCurrentPhase(e);
-  }
-}
-
-function onPointerUp() {
-  dragging = null;
-}
-
-function toAnalysisPoint(e) {
-  return clientToAnalysis(dom.canvas, e.clientX, e.clientY, appState.video.analysisWidth, appState.video.analysisHeight);
-}
-
-// "끌어서 조준 → 확정 버튼" 확정 처리 (§15.2)
-function onConfirmAim() {
-  if (!aimPoint) return;
-  const phase = appState.phase;
-
-  if (phase === 'RULER') {
-    if (!appState.ruler.p1) appState.ruler.p1 = aimPoint;
-    else if (!appState.ruler.p2) {
-      appState.ruler.p2 = aimPoint;
-      const dx = appState.ruler.p2.x - appState.ruler.p1.x;
-      const dy = appState.ruler.p2.y - appState.ruler.p1.y;
-      appState.ruler.pxLength = Math.hypot(dx, dy);
-    }
-  } else if (phase === 'INIT_POINT' && !appState.object.initPoint) {
-    appState.object.initPoint = aimPoint;
-    const defaultBox = Math.max(24, appState.video.analysisWidth * 0.06);
-    appState.object.box = { w: defaultBox, h: defaultBox };
-  } else if (phase === 'TRACK_PAUSED') {
-    document.dispatchEvent(new CustomEvent('app:resumeTrackClick', { detail: { point: aimPoint } }));
-  } else if (appState.view.editingRow != null) {
-    document.dispatchEvent(new CustomEvent('app:rowEditClick', { detail: { point: aimPoint, row: appState.view.editingRow } }));
-  }
-  aimPoint = null;
-  notify();
-  renderCurrentPhase();
-}
-
-function onRulerLengthInput(e) {
-  const v = parseFloat(e.target.value);
-  appState.ruler.realLength = v > 0 ? v : null;
-  if (appState.ruler.realLength && appState.ruler.pxLength) {
-    if (appState.ruler.pxLength < 20) {
-      dom.rulerWarning.textContent = '기준자가 너무 짧습니다. 더 긴 물체를 사용하면 정확해집니다.';
-      dom.rulerWarning.hidden = false;
-    } else {
-      dom.rulerWarning.hidden = true;
-    }
-    appState.ruler.scale = appState.ruler.realLength / appState.ruler.pxLength;
-  }
-  notify();
-}
-
-function hitTestRulerHandle(p) {
-  const R = 14;
-  if (appState.ruler.p1 && dist(p, appState.ruler.p1) < R) return 'p1';
-  if (appState.ruler.p2 && dist(p, appState.ruler.p2) < R) return 'p2';
-  return null;
-}
-function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
-
-// ---------------- 4단계: 분석 구간 ----------------
-function onRangeSliderInput(e) {
-  const isEnd = e.target === dom.rangeEndSlider;
-  const frame = parseInt(e.target.value, 10);
-  if (isEnd) {
-    appState.view.currentFrame = frame; // 조작 중엔 종료 프레임 표시
-  } else {
-    appState.range.startFrame = frame;
-    appState.view.currentFrame = frame;
-  }
-  document.dispatchEvent(new CustomEvent('app:previewFrame', { detail: { frame, precise: false } }));
-}
-function onRangeSliderCommit(e) {
-  const isEnd = e.target === dom.rangeEndSlider;
-  if (isEnd) appState.range.endFrame = parseInt(e.target.value, 10);
-  // 손을 떼면 다시 분석 시작 프레임으로 화면 복귀 (§7.1)
-  appState.view.currentFrame = appState.range.startFrame;
-  setTimeout(() => {
-    document.dispatchEvent(new CustomEvent('app:previewFrame', { detail: { frame: appState.view.currentFrame, precise: true } }));
-  }, 150);
-  notify();
-}
-
-// ---------------- 5단계: 질량/초기 위치 ----------------
-function onMassInput(e) {
-  const v = parseFloat(e.target.value);
-  appState.object.mass = v > 0 ? v : null;
-  notify();
-}
-
-function hitTestBoxHandle(p) {
-  const { initPoint, box } = appState.object;
-  const handles = {
-    tl: { x: initPoint.x - box.w / 2, y: initPoint.y - box.h / 2 },
-    tr: { x: initPoint.x + box.w / 2, y: initPoint.y - box.h / 2 },
-    bl: { x: initPoint.x - box.w / 2, y: initPoint.y + box.h / 2 },
-    br: { x: initPoint.x + box.w / 2, y: initPoint.y + box.h / 2 }
-  };
-  for (const [k, hp] of Object.entries(handles)) if (dist(p, hp) < 14) return k;
-  return null;
-}
-function hitTestBoxInside(p) {
-  const { initPoint, box } = appState.object;
-  return Math.abs(p.x - initPoint.x) < box.w / 2 && Math.abs(p.y - initPoint.y) < box.h / 2;
-}
-function resizeBoxFromHandle(which, p) {
-  const { initPoint } = appState.object;
-  const w = Math.max(24, 2 * Math.abs(p.x - initPoint.x));
-  const h = Math.max(24, 2 * Math.abs(p.y - initPoint.y));
-  appState.object.box = { w, h };
-}
-
-// ---------------- 6단계: 추적 ----------------
-function onStartTracking() {
-  document.dispatchEvent(new CustomEvent('app:startTracking'));
-}
-function onStopTracking() {
-  document.dispatchEvent(new CustomEvent('app:stopTracking'));
-}
-
-// ---------------- 7단계: 검토/수정 ----------------
-export function refreshReviewTable() {
-  const tbody = dom.reviewTableBody;
-  tbody.innerHTML = '';
-  appState.track.data.forEach((row, i) => {
-    const tr = document.createElement('tr');
-    if (row.edited) tr.classList.add('row-edited');
-    tr.innerHTML = `
-      <td>${row.frame}</td>
-      <td>${row.t.toFixed(3)}</td>
-      <td>${(row.physX ?? 0).toFixed(3)}</td>
-      <td>${(row.physY ?? 0).toFixed(3)}</td>
-      <td><button class="btn-edit-row" data-idx="${i}" aria-label="이 행 수정">✏️</button></td>
-    `;
-    tr.addEventListener('mouseenter', () => { appState.view.hoveredRow = i; renderCurrentPhase(); });
-    tr.addEventListener('mouseleave', () => { appState.view.hoveredRow = null; renderCurrentPhase(); });
-    tr.addEventListener('click', (ev) => {
-      if (ev.target.closest('.btn-edit-row')) return;
-      appState.view.hoveredRow = (appState.view.hoveredRow === i) ? null : i;
-      renderCurrentPhase();
-    });
-    tr.querySelector('.btn-edit-row').addEventListener('click', () => startRowEdit(i));
-    tbody.appendChild(tr);
+  /* --- 1단계: 파일 --- */
+  $('fileInput').addEventListener('change', (e) => {
+    const f = e.target.files?.[0];
+    if (f) app.startNewVideo(f);
   });
+
+  /* --- 3단계: FPS --- */
+  $('fpsInput').addEventListener('input', (e) => {
+    const v = parseFloat(e.target.value);
+    s.video.displayFps = isFinite(v) ? v : s.video.estimatedFps;   // 표시 전용
+  });
+  $('fpsNext').addEventListener('click', () => app.setPhase(PHASE.RULER));
+
+  /* --- 4단계: 기준자 --- */
+  $('rulerLen').addEventListener('input', (e) => {
+    const v = parseFloat(e.target.value);
+    s.ruler.realLength = isFinite(v) && v > 0 ? v : 0;
+    updateScale(app);
+    app.render();
+  });
+  $('rulerReset').addEventListener('click', () => {
+    s.ruler.p1 = null; s.ruler.p2 = null; s.ruler.scale = 0;
+    beginRulerAim(app); app.render();
+  });
+  $('rulerNext').addEventListener('click', () => {
+    if (blockReason(s)) return;
+    app.stage.stopAim();
+    app.stage.interaction = null;
+    s.range.startFrame = 0;
+    s.range.endFrame = Math.min(s.video.frameIndex.length - 1, s.range.endFrame || s.video.frameIndex.length - 1);
+    app.setPhase(PHASE.RANGE);
+  });
+
+  /* --- 5단계: 구간 --- */
+  const startR = $('startRange'), endR = $('endRange');
+  let dragTimer = null;
+  const onSliderInput = (which) => {
+    const a = parseInt(startR.value, 10), b = parseInt(endR.value, 10);
+    s.range.startFrame = a; s.range.endFrame = b;
+    app.showPreviewFrame(which === 'end' ? b : a);   // 드래그 중에는 <video> 미리보기
+    app.render();
+  };
+  const onSliderDone = (which) => {
+    clearTimeout(dragTimer);
+    dragTimer = setTimeout(() => {
+      app.showFrame(s.range.startFrame);             // 손을 떼면 '분석 시작' 프레임으로 되돌린다
+    }, 150);
+  };
+  startR.addEventListener('input', () => onSliderInput('start'));
+  endR.addEventListener('input', () => onSliderInput('end'));
+  for (const el of [startR, endR]) {
+    el.addEventListener('change', () => onSliderDone());
+    el.addEventListener('pointerup', () => onSliderDone());
+  }
+  $('rangeNext').addEventListener('click', () => app.prepareRange());
+
+  /* --- 6단계: 질량 + 초기 위치 --- */
+  $('massInput').addEventListener('input', (e) => {
+    const v = parseFloat(e.target.value);
+    s.object.mass = isFinite(v) && v > 0 ? v : 0;
+    app.render();
+  });
+  $('initReset').addEventListener('click', () => {
+    s.object.initPoint = null;
+    beginInitAim(app); app.render();
+  });
+  $('initNext').addEventListener('click', () => {
+    if (blockReason(s)) return;
+    app.stage.stopAim(); app.stage.interaction = null;
+    app.setPhase(PHASE.TRACKING);
+  });
+
+  /* --- 7단계: 추적 --- */
+  $('trackStart').addEventListener('click', () => app.startTracking());
+  $('trackAbort').addEventListener('click', () => app.source?.abort());
+
+  /* --- 8단계: 검토 --- */
+  $('toAnalyze').addEventListener('click', () => app.goAnalyze());
+  $('retrackFrom').addEventListener('click', () => app.retrackFromSelected());
+  $('undoBtn').addEventListener('click', () => app.undo());
 }
 
-function startRowEdit(i) {
-  appState.view.editingRow = i;
-  appState.view.currentFrame = appState.track.data[i].frame;
-  document.dispatchEvent(new CustomEvent('app:previewFrame', { detail: { frame: appState.track.data[i].frame, precise: true } }));
-  notify();
+/* ================================================================== */
+/* 캔버스 상호작용                                                      */
+/* ================================================================== */
+
+export function beginRulerAim(app) {
+  const s = app.state, stage = app.stage;
+  stage.interaction = null;
+  if (!s.ruler.p1) {
+    stage.startAim(null, (p) => { s.ruler.p1 = p; app.render(); beginRulerAim(app); }, '첫 번째 끝점 확인');
+  } else if (!s.ruler.p2) {
+    stage.startAim(null, (p) => { s.ruler.p2 = p; updateScale(app); app.render(); beginRulerAim(app); }, '두 번째 끝점 확인');
+  } else {
+    stage.stopAim();
+    enableRulerDrag(app);
+  }
 }
 
-function onRetrackFromRow() {
-  const i = appState.view.editingRow;
-  if (i == null) return;
-  pushHistory();
-  document.dispatchEvent(new CustomEvent('app:retrackFrom', { detail: { rowIndex: i } }));
+function enableRulerDrag(app) {
+  const s = app.state, stage = app.stage;
+  let holding = null;
+  const hit = (p, q) => Math.hypot(p.x - q.x, p.y - q.y) < Math.max(18, stage.W * 0.02);
+  stage.interaction = {
+    onDown: (p) => {
+      if (hit(p, s.ruler.p1)) { holding = 'p1'; return true; }
+      if (hit(p, s.ruler.p2)) { holding = 'p2'; return true; }
+      return false;
+    },
+    onMove: (p) => {
+      if (!holding) return false;
+      s.ruler[holding] = p; updateScale(app); app.render(); return true;
+    },
+    onUp: () => { if (holding) { holding = null; return true; } return false; }
+  };
 }
 
-// ---------------- 렌더 ----------------
-export function renderCurrentPhase() {
-  const s = appState;
-  dom.guidanceBox.textContent = guidanceText();
-  dom.advanceBtn.disabled = !canAdvance();
+function updateScale(app) {
+  const r = app.state.ruler;
+  if (!r.p1 || !r.p2 || !(r.realLength > 0)) { r.scale = 0; return; }
+  const dpx = Math.hypot(r.p2.x - r.p1.x, r.p2.y - r.p1.y);
+  r.scale = dpx > 0 ? r.realLength / dpx : 0;
+}
 
-  const ctx = dom.canvas.getContext('2d');
-  const bmp = s.view._currentBitmap;
-  drawFrame(ctx, bmp, s.video.analysisWidth, s.video.analysisHeight);
-
-  if (s.phase === 'RULER') {
-    drawRuler(ctx, s.ruler.p1, s.ruler.p2, aimPoint);
-    if (aimPoint) drawLoupe(ctx, dom.canvas, aimPoint.x, aimPoint.y, { destCanvas: dom.canvas, placeAbove: true });
-  }
-  if (s.phase === 'INIT_POINT' && s.object.initPoint) {
-    drawTrackBox(ctx, s.object.initPoint.x, s.object.initPoint.y, s.object.box.w, s.object.box.h);
-  }
-  if (s.phase === 'INIT_POINT' && aimPoint && !s.object.initPoint) {
-    drawLoupe(ctx, dom.canvas, aimPoint.x, aimPoint.y, { destCanvas: dom.canvas, placeAbove: true });
-  }
-  if (['TRACKING', 'TRACK_PAUSED', 'REVIEW'].includes(s.phase)) {
-    drawTrajectoryPoints(ctx, s.track.data, { highlightIndex: s.view.hoveredRow });
-  }
-  if (s.phase === 'TRACK_PAUSED' && aimPoint) {
-    drawLoupe(ctx, dom.canvas, aimPoint.x, aimPoint.y, { destCanvas: dom.canvas, placeAbove: true });
+export function beginInitAim(app) {
+  const s = app.state, stage = app.stage;
+  stage.interaction = null;
+  if (!s.object.initPoint) {
+    stage.startAim(null, (p) => {
+      s.object.initPoint = p;
+      const d = Math.max(24, Math.round(stage.W * 0.06));
+      s.object.box = { w: d, h: d };
+      app.render();
+      enableBoxDrag(app);
+    }, '공 위치 확인');
+  } else {
+    stage.stopAim();
+    enableBoxDrag(app);
   }
 }
+
+function enableBoxDrag(app) {
+  const s = app.state, stage = app.stage;
+  let mode = null, startBox = null, startPt = null;
+  const handleR = Math.max(12, stage.W * 0.018);
+
+  stage.interaction = {
+    onDown: (p) => {
+      const c = s.object.initPoint, b = s.object.box;
+      if (!c) return false;
+      const corners = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
+      for (const [sx, sy] of corners) {
+        const hx = c.x + sx * b.w / 2, hy = c.y + sy * b.h / 2;
+        if (Math.hypot(p.x - hx, p.y - hy) < handleR) {
+          mode = 'resize'; startBox = { ...b }; startPt = p; return true;
+        }
+      }
+      if (Math.abs(p.x - c.x) < b.w / 2 && Math.abs(p.y - c.y) < b.h / 2) {
+        mode = 'move'; startBox = { ...c }; startPt = p; return true;
+      }
+      return false;
+    },
+    onMove: (p) => {
+      if (!mode) return false;
+      const c = s.object.initPoint;
+      if (mode === 'move') {
+        c.x = startBox.x + (p.x - startPt.x);
+        c.y = startBox.y + (p.y - startPt.y);
+      } else {
+        s.object.box.w = Math.max(16, Math.min(stage.W * 0.5, 2 * Math.abs(p.x - c.x)));
+        s.object.box.h = Math.max(16, Math.min(stage.H * 0.5, 2 * Math.abs(p.y - c.y)));
+      }
+      app.render();
+      return true;
+    },
+    onUp: () => { if (mode) { mode = null; return true; } return false; }
+  };
+}
+
+/* ================================================================== */
+/* 오버레이                                                            */
+/* ================================================================== */
+export function collectOverlay(app, ctx, stage) {
+  const s = app.state;
+  if (s.ruler.p1) {
+    // 두 번째 끝점을 정하는 중이면 조준점(또는 마우스)까지 선이 따라온다
+    const live = (!s.ruler.p2 && s.phase === PHASE.RULER)
+      ? (stage.aim?.point || stage.hoverPoint)
+      : null;
+    drawRuler(ctx, s.ruler.p1, s.ruler.p2 || live, stage.W);
+  }
+
+  if ((s.phase === PHASE.INIT_POINT) && s.object.initPoint) {
+    drawBox(ctx, s.object.initPoint.x, s.object.initPoint.y, s.object.box.w, s.object.box.h, stage.W);
+  }
+
+  if (s.track.data.length) {
+    const cur = s.track.data.findIndex(d => d.frame === s.view.currentFrame);
+    drawTrackPoints(ctx, s.track.data, stage.W, { current: cur, highlight: s.view.hoveredRow });
+  }
+}
+
+/* ================================================================== */
+/* 화면 갱신                                                           */
+/* ================================================================== */
+const PANEL_BY_PHASE = {
+  [PHASE.IDLE]: 'p-upload',
+  [PHASE.LOADING]: 'p-loading',
+  [PHASE.FPS_CONFIRM]: 'p-fps',
+  [PHASE.RULER]: 'p-ruler',
+  [PHASE.RANGE]: 'p-range',
+  [PHASE.INIT_POINT]: 'p-init',
+  [PHASE.TRACKING]: 'p-track',
+  [PHASE.TRACK_PAUSED]: 'p-track',
+  [PHASE.REVIEW]: 'p-review',
+  [PHASE.ANALYZE]: 'p-analyze'
+};
+
+export function renderCollect(app) {
+  const s = app.state;
+
+  // 안내 문구는 상태에서 파생
+  $('guide').textContent = guideFor(s);
+
+  const shown = PANEL_BY_PHASE[s.phase];
+  for (const id of new Set(Object.values(PANEL_BY_PHASE))) {
+    $(id)?.classList.toggle('hidden', id !== shown);
+  }
+  $('restartBtn').classList.toggle('hidden', s.phase === PHASE.IDLE || s.phase === PHASE.LOADING);
+  $('legend').classList.toggle('hidden', s.phase !== PHASE.ANALYZE);
+
+  const reason = blockReason(s);
+  const setNext = (id) => {
+    const b = $(id); if (!b) return;
+    b.disabled = !!reason;
+    b.title = reason || '';
+  };
+
+  // 기준자
+  if (s.ruler.p1 && s.ruler.p2) {
+    const dpx = Math.hypot(s.ruler.p2.x - s.ruler.p1.x, s.ruler.p2.y - s.ruler.p1.y);
+    $('rulerPx').classList.remove('hidden');
+    $('rulerPx').textContent = `화면에서 잰 길이: ${dpx.toFixed(1)} 칸`;
+    const short = dpx < 20;
+    $('rulerWarn').classList.toggle('hidden', !short);
+    if (short) $('rulerWarn').textContent = '기준자가 너무 짧습니다. 더 긴 물체를 사용하면 정확해집니다.';
+  } else {
+    $('rulerPx').classList.add('hidden');
+    $('rulerWarn').classList.add('hidden');
+  }
+  setNext('rulerNext');
+
+  // 구간
+  const n = s.video.frameIndex.length;
+  if (n) {
+    const startR = $('startRange'), endR = $('endRange');
+    startR.max = String(n - 1); endR.max = String(n - 1);
+    startR.value = String(s.range.startFrame); endR.value = String(s.range.endFrame);
+    const ft = (i) => s.video.frameIndex[i] ? s.video.frameIndex[i].t.toFixed(3) : '—';
+    $('startLabel').textContent = `${s.range.startFrame}번 (${ft(s.range.startFrame)}초)`;
+    $('endLabel').textContent = `${s.range.endFrame}번 (${ft(s.range.endFrame)}초)`;
+    const rr = blockReason({ ...s, phase: PHASE.RANGE });
+    $('rangeWarn').classList.toggle('hidden', !rr);
+    if (rr) $('rangeWarn').textContent = rr;
+    setNext('rangeNext');
+  }
+
+  // 초기 위치
+  if (s.object.initPoint) {
+    $('boxInfo').classList.remove('hidden');
+    $('boxInfo').textContent = `추적 네모 크기: ${Math.round(s.object.box.w)} × ${Math.round(s.object.box.h)} 칸`;
+  } else $('boxInfo').classList.add('hidden');
+  setNext('initNext');
+
+  // 추적
+  $('trackCount').textContent = `${s.track.progress} / ${s.track.total} 프레임`;
+  const pct = s.track.total ? (s.track.progress / s.track.total * 100) : 0;
+  $('trackBar').style.width = pct.toFixed(1) + '%';
+  $('trackPaused').classList.toggle('hidden', s.phase !== PHASE.TRACK_PAUSED);
+  const running = s.phase === PHASE.TRACKING && s.track.progress > 0;
+  $('trackAbort').classList.toggle('hidden', !running);
+  $('trackStart').classList.toggle('hidden', s.phase !== PHASE.TRACKING || running);
+
+  // 검토
+  if (s.phase === PHASE.REVIEW) renderTable(app);
+  $('reviewActions').classList.toggle('hidden', s.track.editingRow < 0 && s.view.hoveredRow < 0);
+  $('undoBtn').disabled = s.history.length === 0;
+  setNext('toAnalyze');
+}
+
+/* ---------------- 데이터 표 ---------------- */
+let tableSignature = '';
+
+function renderTable(app) {
+  const s = app.state;
+  const phys = computePhysics({
+    data: s.track.data, scale: s.ruler.scale, mass: s.object.mass || 1,
+    analysisHeight: s.video.analysisHeight, smoothing: false, baselineDrop: 0
+  });
+
+  const sig = s.track.data.map(d => `${d.frame}:${d.px.toFixed(2)}:${d.py.toFixed(2)}:${d.edited ? 1 : 0}`).join('|');
+  if (sig === tableSignature) { highlightRows(app); return; }
+  tableSignature = sig;
+
+  const body = $('dataBody');
+  body.innerHTML = '';
+  s.track.data.forEach((d, i) => {
+    const r = phys?.real[i];
+    const tr = document.createElement('tr');
+    tr.dataset.row = String(i);
+    if (d.edited) tr.classList.add('edited');
+    tr.innerHTML = `
+      <td>${d.frame}</td>
+      <td>${(d.t - s.track.data[0].t).toFixed(3)}</td>
+      <td>${r ? r.x.toFixed(3) : '—'}</td>
+      <td>${r ? r.y.toFixed(3) : '—'}</td>
+      <td><button class="edit-btn" type="button" title="이 줄 고치기">✏️</button></td>`;
+
+    tr.addEventListener('mouseenter', () => { s.view.hoveredRow = i; app.render(); });
+    tr.addEventListener('mouseleave', () => { s.view.hoveredRow = -1; app.render(); });
+    tr.addEventListener('click', (e) => {
+      if (e.target.closest('.edit-btn')) return;
+      s.view.hoveredRow = (s.view.hoveredRow === i) ? -1 : i;   // 터치: 탭으로 켜고 끄기
+      app.render();
+    });
+    tr.querySelector('.edit-btn').addEventListener('click', () => app.beginEditRow(i));
+    body.appendChild(tr);
+  });
+  highlightRows(app);
+}
+
+function highlightRows(app) {
+  const s = app.state;
+  const body = $('dataBody');
+  for (const tr of body.children) {
+    const i = parseInt(tr.dataset.row, 10);
+    tr.classList.toggle('hl', i === s.view.hoveredRow);
+    tr.classList.toggle('selected', i === s.track.editingRow);
+  }
+}
+
+export function invalidateTable() { tableSignature = ''; }

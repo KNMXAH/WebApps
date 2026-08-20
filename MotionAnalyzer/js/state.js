@@ -1,179 +1,129 @@
 // state.js — 전역 상태 저장소 및 상태 머신 정의
-// 이 파일은 앱의 "유일한 진실 공급원(single source of truth)"이다.
-// 화면의 안내 문구/버튼 활성 여부는 모두 여기서 파생된다.
+// 안내 문구와 버튼 활성 여부는 반드시 이 파일의 함수에서 파생시킨다.
 
-export const PHASES = [
-  'IDLE', 'LOADING', 'FPS_CONFIRM', 'RULER', 'RANGE',
-  'INIT_POINT', 'TRACKING', 'TRACK_PAUSED', 'REVIEW', 'ANALYZE'
-];
+export const PHASE = {
+  IDLE: 'IDLE',
+  LOADING: 'LOADING',
+  FPS_CONFIRM: 'FPS_CONFIRM',
+  RULER: 'RULER',
+  RANGE: 'RANGE',
+  INIT_POINT: 'INIT_POINT',
+  TRACKING: 'TRACKING',
+  TRACK_PAUSED: 'TRACK_PAUSED',
+  REVIEW: 'REVIEW',
+  ANALYZE: 'ANALYZE'
+};
 
-function freshState() {
+export function createState() {
   return {
-    phase: 'IDLE',
+    phase: PHASE.IDLE,
+
+    engine: 'webcodecs',          // 'webcodecs' | 'fallback'
+    precise: false,               // 현재 화면이 정밀 프레임인가
 
     video: {
-      file: null,
-      objectURL: null,
-      analysisWidth: 0,
-      analysisHeight: 0,
-      originalWidth: 0,
-      originalHeight: 0,
-      frameIndex: [],       // [{index, cts, timescale, t, isKey}]
-      estimatedFps: null,
-      codecInfo: null,
-      durationSec: 0
+      file: null, objectURL: null,
+      analysisWidth: 0, analysisHeight: 0,
+      frameIndex: [],
+      estimatedFps: 0,
+      displayFps: 0,              // 표시 전용. 계산에 절대 쓰지 않는다.
+      duration: 0,
+      srcWidth: 0, srcHeight: 0
     },
 
-    loading: {
-      message: '',
-      progress: null        // 0~100 또는 null(불확정)
-    },
+    ruler: { p1: null, p2: null, realLength: 0, scale: 0 },
 
-    ruler: { p1: null, p2: null, realLength: null, scale: null, pxLength: null },
+    range: { startFrame: 0, endFrame: 0 },
 
-    range: { startFrame: null, endFrame: null },
-
-    object: {
-      mass: null,
-      initPoint: null,
-      box: { w: 0, h: 0 }
-    },
+    object: { mass: 0, initPoint: null, box: { w: 0, h: 0 } },
 
     track: {
-      data: [],              // [{frame, t, px, py, confidence, edited}]
-      template: null,
-      progress: { current: 0, total: 0 },
-      pausedFrame: null
+      data: [],                   // { frame, t, px, py, confidence, edited }
+      pausedFrame: -1,
+      progress: 0,
+      total: 0,
+      editingRow: -1              // REVIEW 단계에서 수정 중인 행 인덱스
     },
 
-    physics: {
-      fit: null,             // {c0,c1,b0,b1,b2, tMean}
-      a: null, g: null, y0: null, y0Auto: null,
-      real: [], theory: [],
-      energyAxisMax: null
-    },
+    physics: null,                // physics.js 결과 객체
 
     view: {
-      energyType: 'BOTH',    // 'KE' | 'PE' | 'BOTH'
-      dataType: 'REAL',      // 'THEORY' | 'REAL'
+      energyType: 'BOTH',
+      dataType: 'THEORY',
       smoothing: false,
-      currentFrame: null,
-      hoveredRow: null,
-      editingRow: null
+      baselineDrop: 0,            // m, 0 이상만 (기준면을 아래로 내린 양)
+      currentFrame: 0,
+      hoveredRow: -1
     },
 
-    cache: {
-      bitmaps: new Map(),    // frameIndex -> ImageBitmap
-      capMax: 400
-    },
-
-    history: []               // 되돌리기용 스냅샷 스택
+    history: []                   // 되돌리기용 track.data 스냅샷
   };
 }
 
-export const appState = freshState();
-
-// ---- 구독(pub/sub) ----
-const listeners = new Set();
-export function subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }
-let notifyScheduled = false;
-export function notify() {
-  if (notifyScheduled) return;
-  notifyScheduled = true;
-  queueMicrotask(() => {
-    notifyScheduled = false;
-    for (const fn of listeners) fn(appState);
-  });
-}
-
-// ---- 상태 전이 ----
-export function setPhase(next) {
-  if (!PHASES.includes(next)) throw new Error(`알 수 없는 상태: ${next}`);
-  appState.phase = next;
-  notify();
-}
-
-export function resetToIdle() {
-  // 캐시된 프레임 해제
-  for (const bmp of appState.cache.bitmaps.values()) {
-    try { bmp.close(); } catch (e) { /* noop */ }
-  }
-  if (appState.video.objectURL) {
-    try { URL.revokeObjectURL(appState.video.objectURL); } catch (e) { /* noop */ }
-  }
-  const fresh = freshState();
-  Object.keys(appState).forEach(k => delete appState[k]);
-  Object.assign(appState, fresh);
-  notify();
-}
-
-// ---- 안내 박스 문구 (상태에서 파생, 하드코딩 분산 금지) ----
-export function guidanceText() {
-  const s = appState;
+/* ------------------------------------------------------------------ */
+/* 안내 박스 문구 — 전부 상태에서 파생                                   */
+/* ------------------------------------------------------------------ */
+export function guideFor(s) {
   switch (s.phase) {
-    case 'IDLE':
-      return '분석할 영상을 업로드하세요. 영상은 서버로 전송되지 않고, 이 기기 안에서만 처리됩니다.';
-    case 'LOADING':
-      return s.loading.message || '영상을 준비하고 있습니다. 잠시만 기다려 주세요.';
-    case 'FPS_CONFIRM':
-      return `이 영상은 약 ${s.video.estimatedFps != null ? s.video.estimatedFps.toFixed(2) : '?'} 프레임/초입니다. 확인을 누르면 다음 단계로 진행합니다.`;
-    case 'RULER':
-      if (!s.ruler.p1) return '영상 속에서 실제 길이를 아는 물체(자, 책상 모서리 등)의 한쪽 끝을 클릭하세요.';
-      if (!s.ruler.p2) return '이제 반대쪽 끝을 클릭하세요.';
-      return '실제 길이를 미터(m) 단위로 입력하세요. 필요하면 끝점을 드래그해 다시 맞출 수 있습니다.';
-    case 'RANGE':
-      return '분석을 시작할 프레임과 끝낼 프레임을 슬라이더로 선택하세요.';
-    case 'INIT_POINT':
-      if (!s.object.mass) return '물체의 질량을 kg 단위로 입력하세요. 그램(g)이라면 1000으로 나누어 입력합니다.';
-      if (!s.object.initPoint) return '공의 한가운데를 클릭하세요.';
-      return '나타난 네모의 크기와 위치를 공에 맞게 조절한 뒤 다음으로 진행하세요.';
-    case 'TRACKING':
-      return '공을 자동으로 추적하고 있습니다. 잠시만 기다려 주세요.';
-    case 'TRACK_PAUSED':
-      return '공을 놓쳤습니다. 이 화면에서 공의 한가운데를 클릭해 주세요.';
-    case 'REVIEW':
-      return '추적된 데이터를 확인하세요. 잘못된 위치가 있다면 ✏️ 버튼으로 수정할 수 있습니다.';
-    case 'ANALYZE':
-      return '운동에너지, 위치에너지, 역학적에너지의 변화를 확인해 보세요.';
+    case PHASE.IDLE:
+      return '분석할 영상 파일을 골라 주세요. 떨어뜨리거나 위로 던진 물체를 옆에서 찍은 영상이 좋습니다.';
+    case PHASE.LOADING:
+      return '영상을 읽고 있습니다. 잠시만 기다려 주세요.';
+    case PHASE.FPS_CONFIRM:
+      return '이 영상이 1초에 몇 장을 담고 있는지 확인하고 넘어가세요.';
+    case PHASE.RULER:
+      if (!s.ruler.p1) return '영상 속에서 실제 길이를 아는 물체(자, 책상 모서리 등)의 한쪽 끝을 조준하고 확인을 누르세요.';
+      if (!s.ruler.p2) return '이제 그 물체의 반대쪽 끝을 조준하고 확인을 누르세요.';
+      if (!(s.ruler.realLength > 0)) return '방금 표시한 물체의 실제 길이를 미터 단위로 적어 주세요.';
+      return '기준자가 설정되었습니다. 끝점을 끌어서 다시 맞출 수도 있습니다.';
+    case PHASE.RANGE:
+      return '분석을 시작할 프레임과 끝낼 프레임을 골라 주세요. 공이 손을 떠난 뒤부터 바닥에 닿기 전까지가 좋습니다.';
+    case PHASE.INIT_POINT:
+      if (!s.object.initPoint) return '공의 한가운데를 조준하고 확인을 누르세요. 그 다음 나타나는 네모의 크기를 공에 맞게 조절하세요.';
+      return '네모의 모서리를 끌어 공이 딱 들어가게 맞추고, 질량을 적은 뒤 다음으로 넘어가세요.';
+    case PHASE.TRACKING:
+      return '공을 따라가는 중입니다. 화면에서 빨간 점이 공을 잘 따라가는지 지켜보세요.';
+    case PHASE.TRACK_PAUSED:
+      return '공을 놓쳤습니다. 이 화면에서 공의 한가운데를 조준하고 확인을 누르세요.';
+    case PHASE.REVIEW:
+      if (s.track.editingRow >= 0) return '공의 올바른 위치를 조준하고 확인을 누르세요.';
+      return '표를 살펴보고 이상한 값이 있으면 연필 단추로 고치세요. 다 됐으면 분석을 시작하세요.';
+    case PHASE.ANALYZE:
+      return '슬라이더를 옮겨 가며 막대의 길이가 어떻게 변하는지 살펴보세요.';
     default:
       return '';
   }
 }
 
-// ---- 다음 단계 진입 가능 여부 ----
-export function canAdvance() {
-  const s = appState;
+/* ------------------------------------------------------------------ */
+/* 다음 단계로 못 가는 이유 (null 이면 진행 가능) — 툴팁에 그대로 쓴다     */
+/* ------------------------------------------------------------------ */
+export function blockReason(s) {
   switch (s.phase) {
-    case 'IDLE': return !!s.video.file;
-    case 'LOADING': return s.video.frameIndex.length > 0;
-    case 'FPS_CONFIRM': return true;
-    case 'RULER': return !!(s.ruler.p1 && s.ruler.p2 && s.ruler.realLength > 0);
-    case 'RANGE': return s.range.startFrame != null && s.range.endFrame != null &&
-      s.range.startFrame < s.range.endFrame &&
-      (s.range.endFrame - s.range.startFrame + 1) >= 5;
-    case 'INIT_POINT': return !!(s.object.mass > 0 && s.object.initPoint);
-    case 'TRACKING': return s.track.data.length > 0 &&
-      s.track.progress.current >= s.track.progress.total;
-    case 'TRACK_PAUSED': return false;
-    case 'REVIEW': return s.track.data.length > 0;
-    case 'ANALYZE': return true;
-    default: return false;
+    case PHASE.RULER:
+      if (!s.ruler.p1 || !s.ruler.p2) return '기준자의 양 끝점을 아직 찍지 않았습니다.';
+      if (!(s.ruler.realLength > 0)) return '기준자의 실제 길이를 적어 주세요.';
+      return null;
+    case PHASE.RANGE: {
+      const { startFrame, endFrame } = s.range;
+      if (startFrame >= endFrame) return '분석 시작이 분석 종료보다 앞서야 합니다.';
+      if (endFrame - startFrame + 1 < 5) return '분석하려면 최소 5프레임 이상 필요합니다.';
+      return null;
+    }
+    case PHASE.INIT_POINT:
+      if (!(s.object.mass > 0)) return '물체의 질량을 적어 주세요.';
+      if (!s.object.initPoint) return '공의 한가운데를 아직 찍지 않았습니다.';
+      return null;
+    case PHASE.REVIEW:
+      if (s.track.data.length < 5) return '데이터가 5개보다 적어 분석할 수 없습니다.';
+      return null;
+    default:
+      return null;
   }
 }
 
-export function pushHistory() {
-  s_clone_push(appState.track.data);
-}
-function s_clone_push(data) {
-  appState.history.push(JSON.parse(JSON.stringify(data)));
-  if (appState.history.length > 20) appState.history.shift();
-}
-export function undoHistory() {
-  const prev = appState.history.pop();
-  if (prev) {
-    appState.track.data = prev;
-    notify();
-    return true;
-  }
-  return false;
-}
+/* 아주 작은 구독 시스템 */
+const listeners = new Set();
+export function subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+export function emit(s) { for (const fn of listeners) fn(s); }
+export function setPhase(s, phase) { s.phase = phase; emit(s); }

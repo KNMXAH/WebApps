@@ -1,371 +1,451 @@
-// main.js — 진입점. 상태 머신과 화면 전환, Worker와의 메시지 교환을 담당한다.
+// main.js — 진입점, 상태 머신, 화면 전환
 
-import { appState, setPhase, resetToIdle, subscribe, notify, canAdvance, pushHistory } from './state.js';
-import { initCollectUI, renderCurrentPhase, refreshReviewTable } from './ui-collect.js';
-import { initAnalyzeUI, enterAnalyzePhase, setAnalyzeBitmap, renderAnalyze } from './ui-analyze.js';
-import { checkBrowserSupport, checkFileSizeConstraints, decideTrack, remuxContainer, transcodeToH264 } from './loader.js';
-import { decideCacheCap } from './framecache.js';
-import { pixelsToPhysical } from './physics.js';
+import { PHASE, createState } from './state.js';
+import { Stage } from './canvas.js';
+import { FrameCache, cacheLimit, analysisSize } from './framecache.js';
+import { loadVideo, webCodecsSupported, sizeWarnings } from './loader.js';
+import { estimateFps, frameIntervalDeviation } from './demuxer.js';
+import { WorkerSource } from './source.js';
+import { probeVideo, FallbackSource } from './fallback.js';
+import { computePhysics } from './physics.js';
+import {
+  initCollect, renderCollect, collectOverlay,
+  beginRulerAim, beginInitAim, invalidateTable
+} from './ui-collect.js';
+import { initAnalyze, renderAnalyze, analyzeOverlay, enableBaselineDrag } from './ui-analyze.js';
 
-const dom = {
-  fileInput: document.getElementById('fileInput'),
-  canvas: document.getElementById('mainCanvas'),
-  guidanceBox: document.getElementById('guidanceBox'),
-  advanceBtn: document.getElementById('advanceBtn'),
-  confirmBtn: document.getElementById('confirmAimBtn'),
-  fpsConfirmBtn: document.getElementById('fpsConfirmBtn'),
-  rulerLengthInput: document.getElementById('rulerLengthInput'),
-  rulerWarning: document.getElementById('rulerWarning'),
-  rangeStartSlider: document.getElementById('rangeStartSlider'),
-  rangeEndSlider: document.getElementById('rangeEndSlider'),
-  massInput: document.getElementById('massInput'),
-  startTrackingBtn: document.getElementById('startTrackingBtn'),
-  stopTrackingBtn: document.getElementById('stopTrackingBtn'),
-  toAnalyzeBtn: document.getElementById('toAnalyzeBtn'),
-  retrackFromRowBtn: document.getElementById('retrackFromRowBtn'),
-  undoBtn: document.getElementById('undoBtn'),
-  reviewTableBody: document.getElementById('reviewTableBody'),
-  trackProgress: document.getElementById('trackProgress'),
+const $ = (id) => document.getElementById(id);
 
-  analyzeCanvas: document.getElementById('analyzeCanvas'),
-  energyBarCanvas: document.getElementById('energyBarCanvas'),
-  energyLineCanvas: document.getElementById('energyLineCanvas'),
-  legendContainer: document.getElementById('legendContainer'),
-  energyTypeRadios: Array.from(document.querySelectorAll('input[name="energyType"]')),
-  dataTypeRadios: Array.from(document.querySelectorAll('input[name="dataType"]')),
-  theoryRadio: document.getElementById('dataTypeTheory'),
-  smoothingCheckbox: document.getElementById('smoothingCheckbox'),
-  massReinput: document.getElementById('massReinput'),
-  analyzeSlider: document.getElementById('analyzeSlider'),
-  backToReviewBtn: document.getElementById('backToReviewBtn'),
-  downloadCsvBtn: document.getElementById('downloadCsvBtn'),
-  gWarningBox: document.getElementById('gWarningBox'),
+class App {
+  constructor() {
+    this.state = createState();
+    this.cache = new FrameCache();
+    this.source = null;
+    this.sizeAttempt = 0;
+    this.maxBaselineDrop = 0;
 
-  panels: Array.from(document.querySelectorAll('[data-phase-panel]')),
-  loadingMessage: document.getElementById('loadingMessage'),
-  precisionBadge: document.getElementById('precisionBadge')
-};
-
-let worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
-
-initCollectUI(dom, worker);
-initAnalyzeUI(dom);
-
-subscribe(() => {
-  showPanelForPhase(appState.phase);
-  dom.advanceBtn.disabled = !canAdvance();
-});
-
-function showPanelForPhase(phase) {
-  dom.panels.forEach(p => {
-    const list = p.dataset.phasePanel.split(',');
-    p.hidden = !list.includes(phase);
-  });
-}
-showPanelForPhase(appState.phase);
-
-// ---------------- 다음 단계 버튼 공통 처리 ----------------
-dom.advanceBtn.addEventListener('click', onAdvance);
-function onAdvance() {
-  const order = ['IDLE', 'LOADING', 'FPS_CONFIRM', 'RULER', 'RANGE', 'INIT_POINT'];
-  const idx = order.indexOf(appState.phase);
-  if (appState.phase === 'RANGE') {
-    // 구간 확정 → 캐시 빌드 후 INIT_POINT로
-    buildCacheForRange().then(() => setPhase('INIT_POINT'));
-    return;
-  }
-  if (idx >= 0 && idx < order.length - 1) setPhase(order[idx + 1]);
-}
-
-// ---------------- 새 영상 업로드 시 초기화 ----------------
-document.getElementById('newVideoBtn')?.addEventListener('click', () => {
-  resetToIdle();
-  showPanelForPhase(appState.phase);
-});
-
-// ---------------- 1단계: 파일 선택 → 3-트랙 분기 ----------------
-document.addEventListener('app:fileChosen', async (e) => {
-  const file = e.detail.file;
-  setPhase('LOADING');
-  appState.loading.message = '영상을 확인하고 있습니다...';
-  notify();
-
-  const support = checkBrowserSupport();
-  if (!support.supported) {
-    appState.loading.message = support.message; // 폴백 경로는 §3.4 참고 문서로 대체(간이 구현)
-    notify();
-  }
-
-  try {
-    let arrayBuffer = await file.arrayBuffer();
-    let parsed = await parseInWorker(arrayBuffer);
-
-    let track = decideTrack(parsed.ok, parsed.supported);
-    if (track === 'B') {
-      appState.loading.message = '영상 형식을 변환하고 있습니다...';
-      notify();
-      try {
-        const remuxed = await remuxContainer(file, (pct) => { appState.loading.progress = pct; notify(); });
-        parsed = await parseInWorker(remuxed);
-        if (!(parsed.ok && parsed.supported)) track = 'C';
-      } catch (err) {
-        track = 'C';
-      }
-    }
-    if (track === 'C') {
-      appState.loading.message = '영상 형식을 변환하고 있습니다...';
-      appState.loading.progress = 0;
-      notify();
-      const transcoded = await transcodeToH264(file, (pct) => { appState.loading.progress = pct; notify(); });
-      parsed = await parseInWorker(transcoded);
-      if (!(parsed.ok && parsed.supported)) throw new Error('이 영상 파일을 읽을 수 없습니다. 다른 영상으로 시도해 주세요.');
-    }
-
-    finalizeParsed(parsed, file);
-  } catch (err) {
-    appState.loading.message = err.message || '이 영상 파일을 읽을 수 없습니다. 다른 영상으로 시도해 주세요.';
-    notify();
-  }
-});
-
-function parseInWorker(arrayBuffer) {
-  return new Promise((resolve) => {
-    const handler = (ev) => {
-      if (ev.data.type === 'parsed') {
-        worker.removeEventListener('message', handler);
-        resolve({ ok: true, ...ev.data });
-      } else if (ev.data.type === 'error') {
-        worker.removeEventListener('message', handler);
-        resolve({ ok: false });
-      }
-    };
-    worker.addEventListener('message', handler);
-    worker.postMessage({ cmd: 'parse', arrayBuffer: arrayBuffer.slice(0) }, []);
-  });
-}
-
-function finalizeParsed(parsed, file) {
-  const originalWidth = parsed.width, originalHeight = parsed.height;
-  const analysisWidth = Math.min(originalWidth, 1280);
-  const analysisHeight = Math.round(originalHeight * (analysisWidth / originalWidth));
-
-  appState.video.file = file;
-  appState.video.objectURL = URL.createObjectURL(file);
-  appState.video.frameIndex = parsed.frameIndex;
-  appState.video.estimatedFps = parsed.estimatedFps;
-  appState.video.originalWidth = originalWidth;
-  appState.video.originalHeight = originalHeight;
-  appState.video.analysisWidth = analysisWidth;
-  appState.video.analysisHeight = analysisHeight;
-  appState.video.durationSec = parsed.durationSec;
-  appState.cache.capMax = decideCacheCap(isTouchDevice());
-
-  dom.canvas.width = analysisWidth;
-  dom.canvas.height = analysisHeight;
-  dom.analyzeCanvas.width = analysisWidth;
-  dom.analyzeCanvas.height = analysisHeight;
-
-  const warnings = checkFileSizeConstraints(parsed.durationSec, originalWidth, originalHeight);
-  if (warnings.length) {
-    appState.loading.message = warnings.map(w => w.message).join(' ');
-  }
-  if (parsed.deviationPct >= 5) {
-    appState.loading.vfrNote = '이 영상은 프레임 간격이 일정하지 않지만, 실제 시간을 사용하므로 분석은 정확합니다.';
-  }
-
-  dom.rangeStartSlider.min = 0;
-  dom.rangeStartSlider.max = parsed.frameIndex.length - 1;
-  dom.rangeEndSlider.min = 0;
-  dom.rangeEndSlider.max = parsed.frameIndex.length - 1;
-  dom.rangeStartSlider.value = 0;
-  dom.rangeEndSlider.value = Math.min(parsed.frameIndex.length - 1, 60);
-  appState.range.startFrame = 0;
-  appState.range.endFrame = Math.min(parsed.frameIndex.length - 1, 60);
-
-  setPhase('FPS_CONFIRM');
-  decodeSingleFrame(0, true);
-}
-
-function isTouchDevice() {
-  return ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
-}
-
-// ---------------- 프레임 미리보기 요청 처리 (§7.2 하이브리드 미리보기) ----------------
-const previewVideo = document.getElementById('previewVideo');
-
-document.addEventListener('app:previewFrame', (e) => {
-  const { frame, precise, forAnalyze } = e.detail;
-  if (!precise) {
-    // 드래그 중: <video>로 대략적인 그림만 즉시 보여준다. 어떤 데이터도 여기서 추출하지 않는다.
-    if (previewVideo.src !== appState.video.objectURL) previewVideo.src = appState.video.objectURL;
-    const approxT = appState.video.frameIndex[frame] ? appState.video.frameIndex[frame].t : 0;
-    previewVideo.currentTime = approxT;
-    const onSeeked = () => {
-      previewVideo.removeEventListener('seeked', onSeeked);
-      const ctx = dom.canvas.getContext('2d');
-      ctx.clearRect(0, 0, dom.canvas.width, dom.canvas.height);
-      ctx.drawImage(previewVideo, 0, 0, dom.canvas.width, dom.canvas.height);
-      dom.precisionBadge.hidden = true;
-    };
-    previewVideo.addEventListener('seeked', onSeeked);
-    return;
-  }
-  // 손을 뗀 뒤 약 150ms 후: WebCodecs로 정확히 디코딩(§7.2). 분석에 쓰이는 모든 프레임은 예외 없이 이 경로를 거친다.
-  decodeSingleFrame(frame, !forAnalyze, forAnalyze);
-  if (!forAnalyze) dom.precisionBadge.hidden = false;
-});
-
-function decodeSingleFrame(frameNum, forCollect, forAnalyze) {
-  const handler = (ev) => {
-    if (ev.data.type === 'decodedSingle' && ev.data.frameNum === frameNum) {
-      worker.removeEventListener('message', handler);
-      if (forAnalyze) setAnalyzeBitmap(ev.data.bitmap);
-      else { appState.view._currentBitmap = ev.data.bitmap; renderCurrentPhase(); }
-    }
-  };
-  worker.addEventListener('message', handler);
-  worker.postMessage({
-    cmd: 'decodeSingle', frameNum,
-    width: appState.video.analysisWidth, height: appState.video.analysisHeight
-  });
-}
-
-// ---------------- 구간 확정 → 캐시 빌드 ----------------
-function buildCacheForRange() {
-  return new Promise((resolve, reject) => {
-    setPhase('LOADING');
-    appState.loading.message = '분석 구간을 준비하고 있습니다...';
-    notify();
-    const handler = (ev) => {
-      if (ev.data.type === 'cacheProgress') {
-        appState.loading.progress = Math.round((ev.data.done / ev.data.total) * 100);
-        notify();
-      } else if (ev.data.type === 'cacheDone') {
-        worker.removeEventListener('message', handler);
-        resolve();
-      } else if (ev.data.type === 'error') {
-        worker.removeEventListener('message', handler);
-        reject(new Error(ev.data.message));
-      }
-    };
-    worker.addEventListener('message', handler);
-    worker.postMessage({
-      cmd: 'buildCache',
-      startFrame: appState.range.startFrame,
-      endFrame: appState.range.endFrame,
-      width: appState.video.analysisWidth,
-      height: appState.video.analysisHeight
+    this.stage = new Stage({
+      wrap: $('stageWrap'),
+      canvas: $('stage'),
+      loupe: $('loupe'),
+      confirmBtn: $('aimConfirm'),
+      badge: $('preciseBadge'),
+      msg: $('stageMsg')
     });
-  });
+    this.stage.setOverlay((ctx, stage) => {
+      if (this.state.phase === PHASE.ANALYZE) analyzeOverlay(this, ctx, stage);
+      else collectOverlay(this, ctx, stage);
+    });
+
+    initCollect(this);
+    initAnalyze(this);
+    $('restartBtn').addEventListener('click', () => { $('fileInput').value = ''; this.reset(); this.render(); });
+
+    this.checkBrowser();
+    this.render();
+  }
+
+  /* ---------------- 공통 ---------------- */
+  notify(text) {
+    const el = $('notice');
+    if (!text) { el.classList.add('hidden'); return; }
+    el.textContent = text;
+    el.classList.remove('hidden');
+  }
+
+  checkBrowser() {
+    if (!webCodecsSupported()) {
+      this.state.engine = 'fallback';
+      $('compatWarn').classList.remove('hidden');
+      $('compatWarn').textContent =
+        '이 브라우저에서는 정밀 프레임 분석이 제한됩니다. 크롬 브라우저를 사용하시거나, iPad는 최신 버전으로 업데이트해 주세요. ' +
+        '지금 상태로도 분석은 되지만 정밀도가 떨어질 수 있습니다.';
+    }
+  }
+
+  render() {
+    renderCollect(this);
+    renderAnalyze(this);
+    this.stage.redraw();
+  }
+
+  setPhase(phase) {
+    const s = this.state;
+    s.phase = phase;
+    this.stage.stopAim();
+    this.stage.interaction = null;
+
+    switch (phase) {
+      case PHASE.RULER:
+        beginRulerAim(this);
+        break;
+      case PHASE.RANGE:
+        this.showFrame(s.range.startFrame);
+        break;
+      case PHASE.INIT_POINT:
+        beginInitAim(this);
+        break;
+      case PHASE.TRACK_PAUSED:
+        this.stage.startAim(null, (p) => {
+          this.source.resume(p.x, p.y);
+          this.state.phase = PHASE.TRACKING;
+          this.render();
+        }, '공 위치 확인');
+        break;
+      case PHASE.REVIEW:
+        invalidateTable();
+        this.recompute();
+        break;
+      case PHASE.ANALYZE:
+        enableBaselineDrag(this);
+        break;
+    }
+    this.render();
+  }
+
+  reset() {
+    const s = this.state;
+    this.source?.dispose?.();
+    this.source = null;
+    this.cache.clear();
+    if (s.video.objectURL) URL.revokeObjectURL(s.video.objectURL);
+    const fresh = createState();
+    fresh.engine = webCodecsSupported() ? 'webcodecs' : 'fallback';
+    Object.assign(this.state, fresh);
+    this.sizeAttempt = 0;
+    this.stage.setBitmap(null);
+    this.stage.setBadge(false);
+    this.stage.setMessage(null);
+    this.notify(null);
+    invalidateTable();
+    $('previewVideo').removeAttribute('src');
+  }
+
+  /* ---------------- 1~2단계 ---------------- */
+  async startNewVideo(file) {
+    this.reset();
+    const s = this.state;
+    s.video.file = file;
+    s.video.objectURL = URL.createObjectURL(file);
+    $('previewVideo').src = s.video.objectURL;
+    this.setPhase(PHASE.LOADING);
+
+    const onStatus = (t) => { $('loadMsg').textContent = t; };
+    const onProgress = (p) => { $('loadBar').style.width = (p * 100).toFixed(1) + '%'; };
+
+    try {
+      if (webCodecsSupported()) {
+        const { demuxed, track } = await loadVideo(file, { onStatus, onProgress });
+        s.engine = 'webcodecs';
+        this.sizeAttempt = this.pickInitialAttempt();
+        const size = analysisSize(demuxed.srcWidth, demuxed.srcHeight, this.sizeAttempt);
+        s.video.analysisWidth = size.width;
+        s.video.analysisHeight = size.height;
+        s.video.frameIndex = demuxed.frameIndex;
+        s.video.srcWidth = demuxed.srcWidth;
+        s.video.srcHeight = demuxed.srcHeight;
+        s.video.duration = demuxed.duration;
+
+        this.source = new WorkerSource();
+        await this.source.configure({
+          config: demuxed.config,
+          frameIndex: demuxed.frameIndex,
+          samples: demuxed.samples,
+          analysisWidth: size.width,
+          analysisHeight: size.height
+        });
+        if (track !== 'A') onStatus('변환을 마쳤습니다.');
+      } else {
+        const probe = await probeVideo(s.video.objectURL);
+        s.engine = 'fallback';
+        this.sizeAttempt = Math.max(1, this.pickInitialAttempt());
+        const size = analysisSize(probe.srcWidth, probe.srcHeight, this.sizeAttempt);
+        s.video.analysisWidth = size.width;
+        s.video.analysisHeight = size.height;
+        s.video.frameIndex = probe.frameIndex;
+        s.video.srcWidth = probe.srcWidth;
+        s.video.srcHeight = probe.srcHeight;
+        s.video.duration = probe.duration;
+
+        this.source = new FallbackSource(probe.video);
+        await this.source.configure({
+          frameIndex: probe.frameIndex,
+          analysisWidth: size.width,
+          analysisHeight: size.height,
+          estimatedFps: probe.estimatedFps
+        });
+        this.notify('이 브라우저에서는 프레임을 정확히 집어내기 어려워 정밀도가 떨어질 수 있습니다.');
+      }
+
+      this.stage.setSize(s.video.analysisWidth, s.video.analysisHeight);
+
+      s.video.estimatedFps = estimateFps(s.video.frameIndex);
+      s.video.displayFps = s.video.estimatedFps;
+      s.range.startFrame = 0;
+      s.range.endFrame = s.video.frameIndex.length - 1;
+
+      $('fileInfo').classList.remove('hidden');
+      $('fileInfo').textContent =
+        `${file.name} · ${s.video.srcWidth}×${s.video.srcHeight} · ${s.video.duration.toFixed(2)}초 · ${s.video.frameIndex.length}장`;
+      $('fpsText').textContent = `이 영상은 약 ${s.video.estimatedFps.toFixed(2)} 프레임/초입니다.`;
+      $('fpsInput').value = s.video.estimatedFps.toFixed(2);
+
+      const dev = frameIntervalDeviation(s.video.frameIndex);
+      const vfr = dev >= 0.05;
+      $('vfrNote').classList.toggle('hidden', !vfr);
+      if (vfr) $('vfrNote').textContent =
+        '이 영상은 프레임 간격이 일정하지 않지만, 실제 시간을 사용하므로 분석은 정확합니다.';
+
+      const warn = sizeWarnings({ duration: s.video.duration, srcHeight: s.video.srcHeight });
+      $('lengthNote').classList.toggle('hidden', !warn);
+      if (warn) $('lengthNote').textContent = warn;
+
+      await this.showFrame(0);
+      this.setPhase(PHASE.FPS_CONFIRM);
+    } catch (err) {
+      console.error(err);
+      this.notify(err.message || '영상을 읽지 못했습니다.');
+      this.setPhase(PHASE.IDLE);
+    }
+  }
+
+  pickInitialAttempt() {
+    const mem = navigator.deviceMemory || 4;
+    const touch = matchMedia('(pointer: coarse)').matches;
+    if (mem <= 2) return 2;
+    if (touch || mem <= 4) return 1;
+    return 0;
+  }
+
+  /* ---------------- 프레임 표시 ---------------- */
+  showPreviewFrame(n) {
+    const s = this.state;
+    const v = $('previewVideo');
+    if (!v.src || !s.video.frameIndex[n]) return this.showFrame(n);
+    v.classList.remove('hidden');
+    this.stage.setBadge(false);
+    s.view.currentFrame = n;
+    try { v.currentTime = s.video.frameIndex[n].t; } catch { }
+  }
+
+  async showFrame(n) {
+    const s = this.state;
+    if (!this.source || !s.video.frameIndex[n]) return;
+    $('previewVideo').classList.add('hidden');
+    s.view.currentFrame = n;
+
+    const cached = this.cache.get(n);
+    if (cached) {
+      this.stage.setBitmap(cached);
+      this.stage.setBadge(this.source.isPrecise);
+      return;
+    }
+    try {
+      const bmp = await this.source.getFrame(n);
+      this.stage.setBitmap(bmp);
+      try { bmp.close(); } catch { }
+      this.stage.setBadge(this.source.isPrecise);
+    } catch (err) {
+      console.warn(err);
+      this.stage.setMessage('이 프레임을 불러오지 못했습니다.');
+      setTimeout(() => this.stage.setMessage(null), 1800);
+    }
+  }
+
+  /* ---------------- 5단계 → 캐싱 ---------------- */
+  async prepareRange() {
+    const s = this.state;
+    const count = s.range.endFrame - s.range.startFrame + 1;
+    const limit = cacheLimit();
+    if (count > limit) {
+      this.notify(`한 번에 다룰 수 있는 양(${limit}장)을 넘었습니다. 분석 구간을 더 짧게 선택해 주세요.`);
+      return;
+    }
+    this.notify(null);
+    this.cache.clear();
+    this.stage.setMessage('프레임을 준비하고 있습니다… 0%');
+
+    try {
+      await this.source.cacheRange(s.range.startFrame, s.range.endFrame, {
+        onFrame: (frame, bmp) => this.cache.set(frame, bmp),
+        onProgress: (done, total) => {
+          this.stage.setMessage(`프레임을 준비하고 있습니다… ${Math.round(done / total * 100)}%`);
+        }
+      });
+      this.stage.setMessage(null);
+      await this.showFrame(s.range.startFrame);
+      this.setPhase(PHASE.INIT_POINT);
+    } catch (err) {
+      console.error(err);
+      this.stage.setMessage(null);
+      if (this.sizeAttempt < 2) {
+        this.notify('메모리가 부족해 화면 크기를 줄여 다시 시도합니다.');
+        await this.resizeAnalysis(this.sizeAttempt + 1);
+        return this.prepareRange();
+      }
+      this.notify('분석 구간을 더 짧게 선택해 주세요.');
+    }
+  }
+
+  /** 분석 좌표계 축소 후 저장된 좌표들을 같은 비율로 옮긴다. */
+  async resizeAnalysis(attempt) {
+    const s = this.state;
+    const size = analysisSize(s.video.srcWidth, s.video.srcHeight, attempt);
+    const k = size.width / s.video.analysisWidth;
+    this.sizeAttempt = attempt;
+    s.video.analysisWidth = size.width;
+    s.video.analysisHeight = size.height;
+
+    const scalePt = (p) => { if (p) { p.x *= k; p.y *= k; } };
+    scalePt(s.ruler.p1); scalePt(s.ruler.p2); scalePt(s.object.initPoint);
+    s.object.box.w *= k; s.object.box.h *= k;
+    for (const d of s.track.data) { d.px *= k; d.py *= k; }
+    if (s.ruler.p1 && s.ruler.p2 && s.ruler.realLength > 0) {
+      const dpx = Math.hypot(s.ruler.p2.x - s.ruler.p1.x, s.ruler.p2.y - s.ruler.p1.y);
+      s.ruler.scale = dpx > 0 ? s.ruler.realLength / dpx : 0;
+    }
+
+    this.cache.clear();
+    this.stage.setSize(size.width, size.height);
+    await this.source.resize?.(size.width, size.height);
+  }
+
+  /* ---------------- 7단계: 추적 ---------------- */
+  startTracking() {
+    const s = this.state;
+    s.track.data = [];
+    s.track.progress = 0;
+    s.track.total = s.range.endFrame - s.range.startFrame + 1;
+    s.history = [];
+    invalidateTable();
+    this.runTrack(s.range.startFrame, { ...s.object.initPoint }, []);
+  }
+
+  runTrack(seedFrame, seedPoint, prev) {
+    const s = this.state;
+    s.phase = PHASE.TRACKING;
+    this.stage.stopAim();
+    this.stage.interaction = null;
+    this.render();
+
+    this.source.track(
+      {
+        start: s.range.startFrame,
+        end: s.range.endFrame,
+        seedFrame,
+        seedPoint,
+        box: { ...s.object.box },
+        prev
+      },
+      {
+        onPoint: (m) => {
+          const rec = {
+            frame: m.frame, t: m.t, px: m.px, py: m.py,
+            confidence: m.confidence, edited: !!m.edited
+          };
+          const i = s.track.data.findIndex(d => d.frame === m.frame);
+          if (i >= 0) s.track.data[i] = rec; else s.track.data.push(rec);
+          s.track.data.sort((a, b) => a.frame - b.frame);
+          s.track.progress = s.track.data.length;
+          s.view.currentFrame = m.frame;
+          const bmp = this.cache.get(m.frame);
+          if (bmp) { this.stage.setBitmap(bmp); this.stage.setBadge(this.source.isPrecise); }
+          this.render();
+        },
+        onPaused: (m) => {
+          s.track.pausedFrame = m.frame;
+          const bmp = this.cache.get(m.frame);
+          if (bmp) this.stage.setBitmap(bmp);
+          this.setPhase(PHASE.TRACK_PAUSED);
+        },
+        onDone: () => {
+          s.track.pausedFrame = -1;
+          this.setPhase(PHASE.REVIEW);
+        },
+        onError: (err) => {
+          console.error(err);
+          this.notify('추적 중 문제가 생겼습니다: ' + err.message);
+          this.setPhase(PHASE.REVIEW);
+        }
+      }
+    );
+  }
+
+  /* ---------------- 8단계: 수정 ---------------- */
+  beginEditRow(i) {
+    const s = this.state;
+    const d = s.track.data[i];
+    if (!d) return;
+    s.track.editingRow = i;
+    this.showFrame(d.frame).then(() => {
+      this.stage.startAim({ x: d.px, y: d.py }, (p) => {
+        d.px = p.x; d.py = p.y; d.edited = true;
+        s.track.editingRow = i;
+        invalidateTable();
+        this.recompute();
+        this.render();
+      }, '이 위치로 고치기');
+      this.render();
+    });
+  }
+
+  retrackFromSelected() {
+    const s = this.state;
+    const i = s.track.editingRow >= 0 ? s.track.editingRow : s.view.hoveredRow;
+    if (i < 0 || !s.track.data[i]) { this.notify('먼저 표에서 줄을 하나 고르세요.'); return; }
+    const after = s.track.data.length - i - 1;
+    if (after <= 0) { this.notify('이 줄 뒤에는 다시 계산할 데이터가 없습니다.'); return; }
+    if (!confirm(`이후 ${after}개의 데이터가 다시 계산됩니다. 계속할까요?`)) return;
+
+    s.history.push(s.track.data.map(d => ({ ...d })));
+    const seed = s.track.data[i];
+    const prev = s.track.data.slice(0, i).map(d => ({ t: d.t, px: d.px, py: d.py }));
+    s.track.data = s.track.data.slice(0, i);   // 시드 프레임은 추적기가 다시 기록한다
+    s.track.progress = s.track.data.length;
+    s.track.editingRow = -1;
+    invalidateTable();
+    this.runTrack(seed.frame, { x: seed.px, y: seed.py }, prev);
+  }
+
+  undo() {
+    const s = this.state;
+    const snap = s.history.pop();
+    if (!snap) return;
+    s.track.data = snap;
+    s.track.progress = snap.length;
+    invalidateTable();
+    this.recompute();
+    this.render();
+  }
+
+  /* ---------------- 9단계 ---------------- */
+  recompute() {
+    const s = this.state;
+    if (s.track.data.length < 3 || !(s.ruler.scale > 0) || !(s.object.mass > 0)) {
+      s.physics = null; return;
+    }
+    s.physics = computePhysics({
+      data: s.track.data,
+      scale: s.ruler.scale,
+      mass: s.object.mass,
+      analysisHeight: s.video.analysisHeight,
+      smoothing: s.view.smoothing,
+      baselineDrop: s.view.baselineDrop
+    });
+    if (s.physics) {
+      const maxH = Math.max(...s.physics.real.map(r => r.y)) - s.physics.baselineDrop;
+      this.maxBaselineDrop = Math.max(maxH * 2, 0.01);
+    }
+  }
+
+  goAnalyze() {
+    const s = this.state;
+    this.recompute();
+    if (!s.physics) { this.notify('데이터가 부족하거나 기준자·질량이 없어 분석할 수 없습니다.'); return; }
+    s.view.currentFrame = s.track.data[0].frame;
+    this.setPhase(PHASE.ANALYZE);
+    this.showFrame(s.view.currentFrame);
+  }
 }
 
-// ---------------- 6단계: 추적 시작/재개/중단 ----------------
-document.addEventListener('app:startTracking', () => {
-  setPhase('TRACKING');
-  appState.track.data = [];
-  worker.postMessage({
-    cmd: 'track',
-    startFrame: appState.range.startFrame,
-    endFrame: appState.range.endFrame,
-    initPoint: appState.object.initPoint,
-    boxW: Math.round(appState.object.box.w),
-    boxH: Math.round(appState.object.box.h)
-  });
-});
-
-document.addEventListener('app:resumeTrackClick', (e) => {
-  const { point } = e.detail;
-  const frame = appState.track.pausedFrame;
-  appState.track.data.push({ frame, t: appState.video.frameIndex[frame].t, px: point.x, py: point.y, confidence: 1, edited: false });
-  setPhase('TRACKING');
-  worker.postMessage({
-    cmd: 'track',
-    startFrame: frame,
-    endFrame: appState.range.endFrame,
-    initPoint: point,
-    boxW: Math.round(appState.object.box.w),
-    boxH: Math.round(appState.object.box.h)
-    // resumeTemplateCrop은 worker 내부에서 새 클릭 지점 기반으로 재생성됨
-  });
-});
-
-document.addEventListener('app:stopTracking', () => {
-  worker.postMessage({ cmd: 'stopTrack' });
-  setPhase('REVIEW');
-  refreshReviewTable();
-});
-
-worker.addEventListener('message', (ev) => {
-  const d = ev.data;
-  if (d.type === 'trackPoint') {
-    appState.track.data.push({ frame: d.frame, t: appState.video.frameIndex[d.frame].t, px: d.x, py: d.y, confidence: d.confidence, edited: false });
-    attachPhysicalXY();
-    notify();
-    renderCurrentPhase();
-  } else if (d.type === 'trackProgress') {
-    appState.track.progress = { current: d.done, total: d.total };
-    dom.trackProgress.textContent = `${d.done} / ${d.total} 프레임`;
-    notify();
-  } else if (d.type === 'trackPaused') {
-    appState.track.pausedFrame = d.frame;
-    decodeSingleFrame(d.frame, true);
-    setPhase('TRACK_PAUSED');
-  } else if (d.type === 'trackDone') {
-    appState.track.progress.current = appState.track.progress.total;
-    setPhase('REVIEW');
-    attachPhysicalXY();
-    refreshReviewTable();
-  } else if (d.type === 'error') {
-    console.error('[worker]', d.message, d.context);
-    appState.loading.message = d.message;
-    notify();
-  }
-});
-
-function attachPhysicalXY() {
-  if (!appState.ruler.scale || appState.track.data.length === 0) return;
-  const phys = pixelsToPhysical(appState.track.data, appState.ruler.scale, appState.video.analysisHeight);
-  phys.forEach((p, i) => {
-    appState.track.data[i].physX = p.x;
-    appState.track.data[i].physY = Math.max(0, p.yRaw - Math.min(...phys.map(q => q.yRaw)));
-  });
-}
-
-// ---------------- 7단계: 행 수정/재추적 ----------------
-document.addEventListener('app:rowEditClick', (e) => {
-  const { point, row } = e.detail;
-  appState.track.data[row].px = point.x;
-  appState.track.data[row].py = point.y;
-  appState.track.data[row].edited = true;
-  attachPhysicalXY();
-  appState.view.editingRow = null;
-  setPhase('REVIEW');
-  refreshReviewTable();
-});
-
-document.addEventListener('app:retrackFrom', (e) => {
-  const rowIndex = e.detail.rowIndex;
-  const remaining = appState.track.data.length - rowIndex - 1;
-  if (!confirm(`이후 ${remaining}개의 데이터가 다시 계산됩니다. 계속할까요?`)) return;
-  const row = appState.track.data[rowIndex];
-  appState.track.data = appState.track.data.slice(0, rowIndex + 1);
-  appState.view.editingRow = null;
-  setPhase('TRACKING');
-  worker.postMessage({
-    cmd: 'track',
-    startFrame: row.frame,
-    endFrame: appState.range.endFrame,
-    initPoint: { x: row.px, y: row.py },
-    boxW: Math.round(appState.object.box.w),
-    boxH: Math.round(appState.object.box.h)
-  });
-});
-
-// ---------------- ANALYZE 진입 ----------------
-subscribe(() => {
-  if (appState.phase === 'ANALYZE' && !appState.view._analyzeEntered) {
-    appState.view._analyzeEntered = true;
-    enterAnalyzePhase();
-  }
-  if (appState.phase !== 'ANALYZE') appState.view._analyzeEntered = false;
-});
+window.addEventListener('DOMContentLoaded', () => { window.__app = new App(); });

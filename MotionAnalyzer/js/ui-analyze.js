@@ -1,147 +1,142 @@
-// ui-analyze.js — 8~10단계: 에너지 시각화 화면
+// ui-analyze.js — 분석 화면 UI (9~11단계)
 
-import { appState, setPhase, notify } from './state.js';
-import { runFullPipeline } from './physics.js';
-import { drawFrame, drawTrajectoryPoints, drawTheoryCurve, drawBaseline, clientToAnalysis } from './canvas.js';
-import { drawEnergyBar, drawEnergyLineChart, LEGEND } from './chart.js';
-import { buildCsv, downloadCsv } from './export.js';
+import { PHASE } from './state.js';
+import { drawTrackPoints, drawTheoryCurve, drawBaseline } from './canvas.js';
+import { theoryCurvePixels, baselinePixelY } from './physics.js';
+import { drawBars, drawLines } from './chart.js';
+import { downloadCsv } from './export.js';
 
-let dom = {};
-let physicsResult = null;
-let draggingBaseline = false;
+const $ = (id) => document.getElementById(id);
 
-export function initAnalyzeUI(elements) {
-  dom = elements;
-  buildLegend();
+export function initAnalyze(app) {
+  const s = app.state;
 
-  dom.energyTypeRadios.forEach(r => r.addEventListener('change', () => { appState.view.energyType = r.value; renderAnalyze(); }));
-  dom.dataTypeRadios.forEach(r => r.addEventListener('change', () => { appState.view.dataType = r.value; renderAnalyze(); }));
-  dom.smoothingCheckbox.addEventListener('change', (e) => { appState.view.smoothing = e.target.checked; recomputePhysics(); });
-  dom.massReinput.addEventListener('change', (e) => {
+  $('analyzeRange').addEventListener('input', (e) => {
+    const i = parseInt(e.target.value, 10);
+    const d = s.track.data[i];
+    if (d) { s.view.currentFrame = d.frame; app.showFrame(d.frame); }
+    app.render();
+  });
+
+  for (const el of document.querySelectorAll('input[name="energyType"]')) {
+    el.addEventListener('change', () => { s.view.energyType = el.value; app.render(); });
+  }
+  for (const el of document.querySelectorAll('input[name="dataType"]')) {
+    el.addEventListener('change', () => { s.view.dataType = el.value; app.render(); });
+  }
+  $('smoothChk').addEventListener('change', (e) => {
+    s.view.smoothing = e.target.checked;
+    app.recompute(); app.render();
+  });
+  $('massInput2').addEventListener('input', (e) => {
     const v = parseFloat(e.target.value);
-    if (v > 0) { appState.object.mass = v; recomputePhysics(); }
+    if (isFinite(v) && v > 0) { s.object.mass = v; app.recompute(); app.render(); }
   });
-  dom.analyzeSlider.addEventListener('input', (e) => {
-    appState.view.currentFrame = parseInt(e.target.value, 10);
-    document.dispatchEvent(new CustomEvent('app:previewFrame', { detail: { frame: appState.view.currentFrame, precise: true, forAnalyze: true } }));
+  $('baseRange').addEventListener('input', (e) => {
+    const frac = parseInt(e.target.value, 10) / 100;
+    s.view.baselineDrop = frac * (app.maxBaselineDrop || 0);
+    app.recompute(); app.render();
   });
-  dom.backToReviewBtn.addEventListener('click', () => setPhase('REVIEW'));
-  dom.downloadCsvBtn.addEventListener('click', onDownloadCsv);
 
-  dom.analyzeCanvas.addEventListener('pointerdown', onBaselinePointerDown);
-  dom.analyzeCanvas.addEventListener('pointermove', onBaselinePointerMove);
-  window.addEventListener('pointerup', () => { draggingBaseline = false; });
+  $('backToReview').addEventListener('click', () => app.setPhase(PHASE.REVIEW));
+  $('downloadCsv').addEventListener('click', () => {
+    if (!downloadCsv(s)) app.notify('데이터를 만들지 못했습니다. 표를 다시 확인해 주세요.');
+  });
 }
 
-function buildLegend() {
-  dom.legendContainer.innerHTML = LEGEND.map(l =>
-    `<span class="legend-item"><span class="legend-swatch" style="background:${l.color}"></span>${l.label}</span>`
-  ).join('');
+/** 분석 화면에서 기준면을 캔버스에서 직접 끌어 내릴 수 있게 한다. */
+export function enableBaselineDrag(app) {
+  const s = app.state, stage = app.stage;
+  let dragging = false;
+  stage.interaction = {
+    onDown: (p) => {
+      const y = baselinePixelY(s.physics, s.ruler.scale, s.video.analysisHeight);
+      if (y == null) return false;
+      if (Math.abs(p.y - y) < Math.max(16, stage.H * 0.03)) { dragging = true; return true; }
+      return false;
+    },
+    onMove: (p) => {
+      if (!dragging || !s.physics) return false;
+      const yPhys = (s.video.analysisHeight - p.y) * s.ruler.scale;
+      s.view.baselineDrop = Math.max(0, s.physics.y0 - yPhys);   // 위로는 잠긴다
+      app.recompute();
+      const frac = app.maxBaselineDrop ? s.view.baselineDrop / app.maxBaselineDrop : 0;
+      $('baseRange').value = String(Math.round(Math.min(1, frac) * 100));
+      app.render();
+      return true;
+    },
+    onUp: () => { if (dragging) { dragging = false; return true; } return false; }
+  };
 }
 
-export function enterAnalyzePhase() {
-  dom.analyzeSlider.min = appState.range.startFrame;
-  dom.analyzeSlider.max = appState.range.endFrame;
-  if (appState.view.currentFrame == null) appState.view.currentFrame = appState.range.startFrame;
-  dom.analyzeSlider.value = appState.view.currentFrame;
-  dom.massReinput.value = appState.object.mass;
-  recomputePhysics();
+export function analyzeOverlay(app, ctx, stage) {
+  const s = app.state;
+  const phys = s.physics;
+
+  if (phys && phys.theoryUsable) {
+    const pts = theoryCurvePixels(phys, s.track.data, s.ruler.scale, s.video.analysisHeight);
+    drawTheoryCurve(ctx, pts, stage.W);
+  }
+  if (phys) {
+    drawBaseline(ctx, baselinePixelY(phys, s.ruler.scale, s.video.analysisHeight), stage.W);
+  }
+  const cur = s.track.data.findIndex(d => d.frame === s.view.currentFrame);
+  drawTrackPoints(ctx, s.track.data, stage.W, { current: cur });
 }
 
-function recomputePhysics() {
-  physicsResult = runFullPipeline({
-    trackData: appState.track.data,
-    scale: appState.ruler.scale,
-    analysisHeight: appState.video.analysisHeight,
-    mass: appState.object.mass,
-    y0Override: appState.physics.y0Override,
-    smoothing: appState.view.smoothing
-  });
-  appState.physics.fit = physicsResult.fit;
-  appState.physics.a = physicsResult.a;
-  appState.physics.g = physicsResult.g;
-  appState.physics.y0 = physicsResult.y0;
-  appState.physics.energyAxisMax = physicsResult.energyAxisMax;
+export function renderAnalyze(app) {
+  const s = app.state;
+  const phys = s.physics;
+  if (s.phase !== PHASE.ANALYZE) return;
 
-  if (physicsResult.gSanity.level !== 'ok') {
-    dom.gWarningBox.hidden = false;
-    dom.gWarningBox.textContent = physicsResult.gSanity.message;
-    dom.gWarningBox.className = 'g-warning ' + physicsResult.gSanity.level;
-    dom.theoryRadio && (dom.theoryRadio.disabled = physicsResult.gSanity.level === 'error');
-  } else {
-    dom.gWarningBox.hidden = true;
+  const N = s.track.data.length;
+  const slider = $('analyzeRange');
+  slider.min = '0'; slider.max = String(Math.max(0, N - 1));
+  let idx = s.track.data.findIndex(d => d.frame === s.view.currentFrame);
+  if (idx < 0) { idx = 0; s.view.currentFrame = s.track.data[0]?.frame ?? 0; }
+  slider.value = String(idx);
+
+  const fi = s.video.frameIndex[s.view.currentFrame];
+  $('analyzeLabel').textContent = fi
+    ? `${s.view.currentFrame}번 프레임 (${(fi.t - s.video.frameIndex[s.range.startFrame].t).toFixed(3)}초)`
+    : '—';
+
+  $('massInput2').value = s.object.mass || '';
+  $('smoothChk').checked = s.view.smoothing;
+
+  // g 안전장치 안내
+  const warn = $('physWarn');
+  if (phys?.warning) {
+    warn.textContent = phys.warning.text;
+    warn.classList.remove('hidden');
+  } else warn.classList.add('hidden');
+
+  // 이론 모드를 못 쓰는 경우 강제로 현실 모드
+  const theoryRadio = document.querySelector('input[name="dataType"][value="THEORY"]');
+  const realRadio = document.querySelector('input[name="dataType"][value="REAL"]');
+  const theoryOk = !!phys?.theoryUsable;
+  theoryRadio.disabled = !theoryOk;
+  if (!theoryOk && s.view.dataType === 'THEORY') {
+    s.view.dataType = 'REAL';
+    realRadio.checked = true;
   }
 
-  notify();
-  renderAnalyze();
-}
+  if (!phys) return;
 
-function onBaselinePointerDown(e) {
-  const p = toAnalysisPoint(e);
-  const baselineY = appState.video.analysisHeight - (appState.physics.y0 / appState.ruler.scale);
-  if (Math.abs(p.y - baselineY) < 10) draggingBaseline = true;
-}
-function onBaselinePointerMove(e) {
-  if (!draggingBaseline) return;
-  const p = toAnalysisPoint(e);
-  const newY0 = (appState.video.analysisHeight - p.y) * appState.ruler.scale;
-  // 위로는 y0Auto에서 잠금(§12.5) — physics.js의 runFullPipeline이 최종적으로 clamp함
-  appState.physics.y0Override = Math.min(newY0, physicsResult.y0Auto);
-  recomputePhysics();
-}
-function toAnalysisPoint(e) {
-  return clientToAnalysis(dom.analyzeCanvas, e.clientX, e.clientY, appState.video.analysisWidth, appState.video.analysisHeight);
-}
+  const rows = s.view.dataType === 'THEORY' ? phys.theory : phys.real;
+  const row = rows[idx];
+  if (!row) return;
 
-export function setAnalyzeBitmap(bitmap) {
-  appState.view._analyzeBitmap = bitmap;
-  renderAnalyze();
-}
+  drawBars($('barChart'), {
+    energyType: s.view.energyType,
+    KE: row.KE, PE: row.PE,
+    axisMax: phys.energyAxisMax,
+    label: (s.view.dataType === 'THEORY' ? '이론' : '현실') + ' · 이 순간의 에너지'
+  });
 
-export function renderAnalyze() {
-  if (!physicsResult) return;
-  const s = appState;
-  const ctx = dom.analyzeCanvas.getContext('2d');
-  drawFrame(ctx, s.view._analyzeBitmap, s.video.analysisWidth, s.video.analysisHeight);
-
-  const frameIdx = s.view.currentFrame - s.range.startFrame;
-
-  // 실측 궤적(전체는 옅게, 현재는 진하게) + 이론 곡선
-  const measuredPoints = s.track.data.map(d => ({ px: d.px, py: d.py }));
-  drawTrajectoryPoints(ctx, measuredPoints);
-  const theoryPoints = physicsResult.theory.map((th, i) => physToPixel(th, s));
-  drawTheoryCurve(ctx, theoryPoints);
-
-  const y0PxFromBottom = s.physics.y0 / s.ruler.scale;
-  drawBaseline(ctx, s.video.analysisHeight, y0PxFromBottom, s.video.analysisWidth);
-
-  // 현재 프레임 강조점
-  if (s.track.data[frameIdx]) {
-    ctx.save();
-    ctx.fillStyle = '#E23D3D';
-    ctx.beginPath();
-    ctx.arc(s.track.data[frameIdx].px, s.track.data[frameIdx].py, 7, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  const series = s.view.dataType === 'THEORY' ? physicsResult.theory : physicsResult.real;
-  const point = series[frameIdx] || series[series.length - 1];
-
-  drawEnergyBar(dom.energyBarCanvas, point, s.view.energyType, physicsResult.energyAxisMax);
-  drawEnergyLineChart(dom.energyLineCanvas, series, physicsResult.energyAxisMax, point ? point.t : null);
-}
-
-function physToPixel(p, s) {
-  const px = p.x / s.ruler.scale + s.track.data[0].px;
-  const py = s.video.analysisHeight - (p.yRaw / s.ruler.scale);
-  return { px, py };
-}
-
-function onDownloadCsv() {
-  const csv = buildCsv(appState, physicsResult);
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
-  downloadCsv(csv, `motion_analysis_${stamp}.csv`);
+  drawLines($('lineChart'), {
+    rows: rows.map(r => ({ t: r.t, KE: r.KE, PE: r.PE, E: r.E })),
+    axisMax: phys.energyAxisMax,
+    currentIndex: idx
+  });
 }

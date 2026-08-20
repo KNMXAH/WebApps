@@ -1,192 +1,179 @@
-// physics.js — 물리 계산 (§12). 이 절의 규칙을 절대 임의로 바꾸지 않는다.
+// physics.js — §12 의 정의를 그대로 구현한다.
+// 규칙: Δt 는 언제나 실제 타임스탬프 차이, y 는 위쪽이 +, g 는 피팅에서 얻은 |a|.
 
-/** §12.2 픽셀 → 물리 좌표 변환. y축은 위로 갈 때 증가(부호 반전 필수). */
-export function pixelsToPhysical(track, scale, analysisHeight) {
-  const px0 = track[0].px;
-  return track.map(p => ({
-    frame: p.frame,
-    t: p.t,
-    x: (p.px - px0) * scale,
-    yRaw: (analysisHeight - p.py) * scale,
-    edited: !!p.edited
-  }));
-}
-
-/** 최소제곱 1차 회귀: y = c0 + c1*x */
-function linearFit(xs, ys) {
-  const n = xs.length;
-  const xMean = xs.reduce((a, b) => a + b, 0) / n;
-  const yMean = ys.reduce((a, b) => a + b, 0) / n;
-  let sxy = 0, sxx = 0;
-  for (let i = 0; i < n; i++) { sxy += (xs[i] - xMean) * (ys[i] - yMean); sxx += (xs[i] - xMean) ** 2; }
-  const c1 = sxx !== 0 ? sxy / sxx : 0;
-  const c0 = yMean - c1 * xMean;
-  return { c0, c1 };
-}
-
-/** 최소제곱 2차 회귀: y = b0 + b1*x + b2*x^2 (정규방정식, x는 이미 중심화됨) */
-function quadraticFit(xs, ys) {
-  const n = xs.length;
-  let S0 = n, S1 = 0, S2 = 0, S3 = 0, S4 = 0;
-  let T0 = 0, T1 = 0, T2 = 0;
-  for (let i = 0; i < n; i++) {
-    const x = xs[i], y = ys[i];
-    const x2 = x * x, x3 = x2 * x, x4 = x2 * x2;
-    S1 += x; S2 += x2; S3 += x3; S4 += x4;
-    T0 += y; T1 += x * y; T2 += x2 * y;
-  }
-  // [S0 S1 S2][b0]   [T0]
-  // [S1 S2 S3][b1] = [T1]
-  // [S2 S3 S4][b2]   [T2]
-  const A = [[S0, S1, S2], [S1, S2, S3], [S2, S3, S4]];
-  const B = [T0, T1, T2];
-  const sol = solve3x3(A, B);
-  return { b0: sol[0], b1: sol[1], b2: sol[2] };
-}
-
-function solve3x3(A, B) {
-  // 가우스 소거법
-  const M = A.map((row, i) => [...row, B[i]]);
-  for (let col = 0; col < 3; col++) {
-    let pivotRow = col;
-    for (let r = col + 1; r < 3; r++) if (Math.abs(M[r][col]) > Math.abs(M[pivotRow][col])) pivotRow = r;
-    [M[col], M[pivotRow]] = [M[pivotRow], M[col]];
-    const pivot = M[col][col] || 1e-12;
-    for (let c = col; c < 4; c++) M[col][c] /= pivot;
-    for (let r = 0; r < 3; r++) {
-      if (r === col) continue;
-      const factor = M[r][col];
-      for (let c = col; c < 4; c++) M[r][c] -= factor * M[col][c];
+/** 작은 정방 연립방정식 해법 (부분 피벗 가우스 소거) */
+function solve(A, b) {
+  const n = b.length;
+  const M = A.map((row, i) => [...row, b[i]]);
+  for (let c = 0; c < n; c++) {
+    let piv = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[piv][c])) piv = r;
+    if (Math.abs(M[piv][c]) < 1e-14) return null;
+    [M[c], M[piv]] = [M[piv], M[c]];
+    for (let r = 0; r < n; r++) {
+      if (r === c) continue;
+      const f = M[r][c] / M[c][c];
+      for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k];
     }
   }
-  return [M[0][3], M[1][3], M[2][3]];
+  const x = new Array(n);
+  for (let i = 0; i < n; i++) x[i] = M[i][n] / M[i][i];
+  return x;
+}
+
+/** 3점 이동평균. 양 끝점은 원본 유지(§12.6) */
+function movingAverage3(arr) {
+  if (arr.length < 3) return arr.slice();
+  const out = arr.slice();
+  for (let i = 1; i < arr.length - 1; i++) out[i] = (arr[i - 1] + arr[i] + arr[i + 1]) / 3;
+  return out;
+}
+
+/** 중앙차분 (양 끝은 전진·후진차분) */
+function centralDiff(vals, t) {
+  const n = vals.length;
+  const out = new Array(n).fill(0);
+  if (n < 2) return out;
+  for (let i = 0; i < n; i++) {
+    if (i === 0) out[i] = (vals[1] - vals[0]) / (t[1] - t[0]);
+    else if (i === n - 1) out[i] = (vals[n - 1] - vals[n - 2]) / (t[n - 1] - t[n - 2]);
+    else out[i] = (vals[i + 1] - vals[i - 1]) / (t[i + 1] - t[i - 1]);
+  }
+  return out;
 }
 
 /**
- * §12.3 회귀: 시간을 중심화한 뒤 x는 1차, y는 2차로 회귀한다.
- * physical: [{t, x, yRaw}]
+ * @param {Object} p
+ * @param {Array} p.data            [{frame, t, px, py, edited}] — t 는 영상 절대 시간(초)
+ * @param {number} p.scale          m/px
+ * @param {number} p.mass           kg
+ * @param {number} p.analysisHeight 분석 좌표계 세로 픽셀 수
+ * @param {boolean} p.smoothing     화면 표시용 평활화 여부
+ * @param {number} p.baselineDrop   기준면을 자동 최저점보다 얼마나 더 내렸는지 (m, 0 이상)
  */
-export function fitRegression(physical) {
-  const ts = physical.map(p => p.t);
-  const tMean = ts.reduce((a, b) => a + b, 0) / ts.length;
-  const taus = ts.map(t => t - tMean);
+export function computePhysics({ data, scale, mass, analysisHeight, smoothing = false, baselineDrop = 0 }) {
+  const N = data.length;
+  if (N < 3 || !(scale > 0) || !(mass > 0)) return null;
 
-  const { c0, c1 } = linearFit(taus, physical.map(p => p.x));
-  const { b0, b1, b2 } = quadraticFit(taus, physical.map(p => p.yRaw));
+  // 1. 상대 시간 (분석 시작 프레임이 0초)
+  const t0 = data[0].t;
+  const t = data.map(d => d.t - t0);
 
-  return { c0, c1, b0, b1, b2, tMean };
-}
+  // 2. 픽셀 → 물리 좌표 (y 는 위쪽이 +)
+  const px0 = data[0].px;
+  const xRawArr = data.map(d => (d.px - px0) * scale);
+  const yRawArr = data.map(d => (analysisHeight - d.py) * scale);
 
-/** §12.4 이론 데이터 생성 */
-export function theoreticalSeries(physical, fit) {
-  const a = 2 * fit.b2;
+  // 3. 회귀는 언제나 원자료로 한다 (평활화는 화면 표시용)
+  const tbar = t.reduce((a, b) => a + b, 0) / N;
+  const tau = t.map(v => v - tbar);
+
+  // x = c0 + c1·τ  (τ 의 합이 0 이므로 해가 단순해진다)
+  let S2 = 0, S3 = 0, S4 = 0, Sx = 0, Stx = 0, Sy = 0, Sty = 0, St2y = 0;
+  for (let i = 0; i < N; i++) {
+    const q = tau[i], q2 = q * q;
+    S2 += q2; S3 += q2 * q; S4 += q2 * q2;
+    Sx += xRawArr[i]; Stx += q * xRawArr[i];
+    Sy += yRawArr[i]; Sty += q * yRawArr[i]; St2y += q2 * yRawArr[i];
+  }
+  const c0 = Sx / N;
+  const c1 = S2 > 1e-18 ? Stx / S2 : 0;
+
+  // y = b0 + b1·τ + b2·τ²
+  const sol = solve([[N, 0, S2], [0, S2, S3], [S2, S3, S4]], [Sy, Sty, St2y]);
+  if (!sol) return null;
+  const [b0, b1, b2] = sol;
+
+  // 4. 가속도와 중력가속도 — 9.8 을 쓰지 않는다
+  const a = 2 * b2;
   const g = Math.abs(a);
-  const theory = physical.map(p => {
-    const tau = p.t - fit.tMean;
-    const xTh = fit.c0 + fit.c1 * tau;
-    const yThRaw = fit.b0 + fit.b1 * tau + fit.b2 * tau * tau;
-    const vxTh = fit.c1;
-    const vyTh = fit.b1 + 2 * fit.b2 * tau;
-    return { frame: p.frame, t: p.t, x: xTh, yRaw: yThRaw, vx: vxTh, vy: vyTh, v: Math.hypot(vxTh, vyTh) };
-  });
-  return { a, g, theory };
-}
 
-/** §12.5 위치에너지 기준면(y0) — 실측·이론 최저점 중 더 낮은 쪽 */
-export function computeY0(realPhysical, theoryPhysical) {
-  const minReal = Math.min(...realPhysical.map(p => p.yRaw));
-  const minTheory = Math.min(...theoryPhysical.map(p => p.yRaw));
-  return Math.min(minReal, minTheory);
-}
+  // 5. 이론 위치·속도
+  const xTh = tau.map(q => c0 + c1 * q);
+  const yThRaw = tau.map(q => b0 + b1 * q + b2 * q * q);
+  const vxTh = tau.map(() => c1);
+  const vyTh = tau.map(q => b1 + 2 * b2 * q);
 
-/** §12.6 현실 속도: 중앙차분(내부점), 전진/후진차분(끝점) */
-export function centralDifferenceVelocity(physical) {
-  const n = physical.length;
-  const out = physical.map(p => ({ ...p }));
-  for (let i = 0; i < n; i++) {
-    let vx, vy;
-    if (i === 0) {
-      const dt = physical[1].t - physical[0].t;
-      vx = (physical[1].x - physical[0].x) / dt;
-      vy = (physical[1].yRaw - physical[0].yRaw) / dt;
-    } else if (i === n - 1) {
-      const dt = physical[n - 1].t - physical[n - 2].t;
-      vx = (physical[n - 1].x - physical[n - 2].x) / dt;
-      vy = (physical[n - 1].yRaw - physical[n - 2].yRaw) / dt;
-    } else {
-      const dt = physical[i + 1].t - physical[i - 1].t;
-      vx = (physical[i + 1].x - physical[i - 1].x) / dt;
-      vy = (physical[i + 1].yRaw - physical[i - 1].yRaw) / dt;
-    }
-    out[i].vx = vx; out[i].vy = vy; out[i].v = Math.hypot(vx, vy);
+  // 6. 현실 위치 (평활화 옵션은 위치에만 적용)
+  const xArr = smoothing ? movingAverage3(xRawArr) : xRawArr.slice();
+  const yArr = smoothing ? movingAverage3(yRawArr) : yRawArr.slice();
+
+  // 7. 기준면: 실측과 이론 최저점 중 더 낮은 쪽 (음수 방지)
+  const y0 = Math.min(Math.min(...yArr), Math.min(...yThRaw));
+  const drop = Math.max(0, baselineDrop);
+  const h = yArr.map(v => v - y0 + drop);
+  const hTh = yThRaw.map(v => v - y0 + drop);
+
+  // 8. 현실 속도 — 중앙차분
+  const vx = centralDiff(xArr, t);
+  const vy = centralDiff(yArr, t);
+
+  // 9. 에너지 — 이론과 현실이 같은 g 를 쓴다
+  const real = [], theory = [];
+  for (let i = 0; i < N; i++) {
+    const vR = Math.hypot(vx[i], vy[i]);
+    const KEr = 0.5 * mass * vR * vR;
+    const PEr = mass * g * h[i];
+    real.push({
+      frame: data[i].frame, t: t[i],
+      x: xArr[i], y: h[i], vx: vx[i], vy: vy[i], v: vR,
+      KE: KEr, PE: PEr, E: KEr + PEr,
+      edited: !!data[i].edited
+    });
+
+    const vT = Math.hypot(vxTh[i], vyTh[i]);
+    const KEt = 0.5 * mass * vT * vT;
+    const PEt = mass * g * hTh[i];
+    theory.push({
+      frame: data[i].frame, t: t[i],
+      x: xTh[i], y: hTh[i], vx: vxTh[i], vy: vyTh[i], v: vT,
+      KE: KEt, PE: PEt, E: KEt + PEt
+    });
   }
-  return out;
-}
 
-/** §12.6 선택적 평활화: 위치에 3점 이동평균(양 끝점은 원본 유지). 속도에는 직접 적용하지 않는다. */
-export function smoothPositions(physical) {
-  const n = physical.length;
-  const out = physical.map(p => ({ ...p }));
-  for (let i = 1; i < n - 1; i++) {
-    out[i].x = (physical[i - 1].x + physical[i].x + physical[i + 1].x) / 3;
-    out[i].yRaw = (physical[i - 1].yRaw + physical[i].yRaw + physical[i + 1].yRaw) / 3;
-  }
-  return out;
-}
-
-/** §12.7 에너지 계산. g는 반드시 §12.4에서 피팅한 |a|를 사용(9.8 하드코딩 금지). */
-export function computeEnergies(series, mass, g, y0) {
-  return series.map(p => {
-    const h = Math.max(0, p.yRaw - y0);
-    const KE = 0.5 * mass * p.v * p.v;
-    const PE = mass * g * h;
-    return { ...p, h, KE, PE, E: KE + PE };
-  });
-}
-
-/** §12.7 g 안전장치 판정 */
-export function checkGSanity(a, g) {
-  if (a >= 0) return { level: 'error', code: 'A_NONNEGATIVE', message: '추적 결과가 물리적으로 이상합니다. 데이터를 다시 확인해 주세요.' };
-  if (g < 1.0) return { level: 'error', code: 'NOT_FALLING', message: '이 영상은 낙하 운동으로 보이지 않습니다. 위로 던지거나 떨어뜨리는 영상을 사용해 주세요.' };
-  if (g < 4.9 || g > 19.6) return { level: 'warning', code: 'OUT_OF_RANGE', message: '기준자 길이나 촬영 각도를 확인해 주세요.' };
-  return { level: 'ok', code: 'OK', message: '' };
-}
-
-/**
- * §12.8 계산 순서 요약을 따르는 파이프라인.
- * appState.track.data, ruler.scale, video.analysisHeight, object.mass, y0Override(드래그 조정) 사용
- */
-export function runFullPipeline({ trackData, scale, analysisHeight, mass, y0Override, smoothing }) {
-  const rawPhysical = pixelsToPhysical(trackData, scale, analysisHeight);
-
-  const fit = fitRegression(rawPhysical);
-  const { a, g, theory: theoryRawSeries } = theoreticalSeries(rawPhysical, fit);
-
-  const y0Auto = computeY0(rawPhysical, theoryRawSeries);
-  const y0 = (y0Override != null && y0Override <= y0Auto) ? y0Override : y0Auto;
-  // §12.5: 위로는 y0(자동 최저점)에서 잠금 → y0Override는 y0Auto보다 클 수 없다.
-  const y0Effective = Math.min(y0Override != null ? y0Override : y0Auto, y0Auto);
-
-  const positionSource = smoothing ? smoothPositions(rawPhysical) : rawPhysical;
-  const realWithVelocity = centralDifferenceVelocity(positionSource);
-
-  const gSanity = checkGSanity(a, g);
-
-  const real = computeEnergies(realWithVelocity, mass, g, y0Effective);
-  const theory = computeEnergies(theoryRawSeries, mass, g, y0Effective);
-
-  // CSV는 평활화 여부와 무관하게 항상 원자료를 기록한다 (§12.6, §14.3)
-  const rawReal = computeEnergies(centralDifferenceVelocity(rawPhysical), mass, g, y0Effective);
-  const rawTheory = theory; // 이론값은 회귀식 자체가 원자료 기반이라 평활화 대상이 아님
-
-  // §13.2: 축 상한은 전체 구간 최대 역학적에너지 * 1.05, real/theory 공통, 옵션 변경에 불변
-  const maxE = Math.max(...real.map(p => p.E), ...theory.map(p => p.E));
-  const energyAxisMax = maxE * 1.05;
+  // 10. 막대 축 상한 — 전체 구간 최대 역학적에너지로 고정
+  let maxE = 0;
+  for (let i = 0; i < N; i++) maxE = Math.max(maxE, real[i].E, theory[i].E);
+  const energyAxisMax = maxE > 0 ? maxE * 1.05 : 1;
 
   return {
-    fit, a, g, y0: y0Effective, y0Auto,
-    real, theory, energyAxisMax, gSanity,
-    rawReal, rawTheory,
-    rawPhysical // CSV용 비평활화 원자료 접근에 사용
+    fit: { c0, c1, b0, b1, b2, tbar },
+    a, g, y0, baselineDrop: drop,
+    real, theory, energyAxisMax,
+    warning: gWarning(a, g),
+    theoryUsable: a < 0
   };
+}
+
+/** §12.7 g 안전장치. 정상 범위에서는 아무 말도 하지 않는다. */
+function gWarning(a, g) {
+  if (a >= 0) return { level: 'error', text: '추적 결과가 물리적으로 이상합니다. 데이터를 다시 확인해 주세요.' };
+  if (g < 1.0) return { level: 'error', text: '이 영상은 낙하 운동으로 보이지 않습니다. 위로 던지거나 떨어뜨리는 영상을 사용해 주세요.' };
+  if (g < 4.9 || g > 19.6) return { level: 'warn', text: '기준자 길이나 촬영 각도를 확인해 주세요.' };
+  return null;
+}
+
+/** 이론 궤적을 촘촘히 뽑아 캔버스에 곡선으로 그릴 때 쓴다(§11.1). */
+export function theoryCurvePixels(phys, data, scale, analysisHeight, steps = 120) {
+  if (!phys || !data.length) return [];
+  const { c0, c1, b0, b1, b2, tbar } = phys.fit;
+  const t0 = data[0].t;
+  const tStart = data[0].t - t0, tEnd = data[data.length - 1].t - t0;
+  const px0 = data[0].px;
+  const pts = [];
+  for (let i = 0; i <= steps; i++) {
+    const tt = tStart + (tEnd - tStart) * (i / steps);
+    const q = tt - tbar;
+    const x = c0 + c1 * q;
+    const yRaw = b0 + b1 * q + b2 * q * q;
+    pts.push({ px: x / scale + px0, py: analysisHeight - yRaw / scale });
+  }
+  return pts;
+}
+
+/** 기준면(y=0)의 화면 픽셀 y 좌표 */
+export function baselinePixelY(phys, scale, analysisHeight) {
+  if (!phys) return null;
+  const yLine = phys.y0 - phys.baselineDrop;   // 물리 좌표(임시 원점 기준)
+  return analysisHeight - yLine / scale;
 }
