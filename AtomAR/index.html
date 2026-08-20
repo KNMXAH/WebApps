@@ -112,23 +112,23 @@
         AFRAME.registerComponent('camera-distance-handler', {
             tick: function() {
                 const camera = document.querySelector('a-camera') || document.querySelector('[camera]');
-                const marker = document.querySelector('a-marker');
+                // const marker = document.querySelector('a-marker');
 
                 // Three.js의 Vector3 객체를 이용해 월드 좌표를 담을 준비
-                const markerPosition = new THREE.Vector3();
+                const atomPosition = new THREE.Vector3();
                 const cameraPosition = new THREE.Vector3();
 
                 // 마커(this.el)와 카메라의 실제 3차원 월드 좌표 가져오기
-                this.el.object3D.getWorldPosition(markerPosition);
+                this.el.object3D.getWorldPosition(atomPosition);
                 camera.object3D.getWorldPosition(cameraPosition);
 
                 // 거리 계산
-                const distance = markerPosition.distanceTo(cameraPosition);
+                const distance = atomPosition.distanceTo(cameraPosition);
                 
-                // alpha = (distance - toDistance)/(fromDistance - toDistance);
-                // alpha = Math.min(Math.max(alpha, 0.0), 1.0);
-                console.log("distance: " + distance)
-                console.log("alpha: " + alpha)
+                alpha = (distance - toDistance)/(fromDistance - toDistance);
+                alpha = Math.min(Math.max(alpha, 0.0), 1.0);
+                // console.log("distance: " + distance)
+                // console.log("alpha: " + alpha)
                 
                 
                 // 카메라가 가까이 오면(2미터 이내) 껍질이 투명해짐
