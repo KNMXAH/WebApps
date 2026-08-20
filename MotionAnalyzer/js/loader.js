@@ -64,21 +64,41 @@ async function getFFmpeg(onStatus) {
   return ffmpegPromise;
 }
 
+const ffmpegLog = [];
+
 async function runFFmpeg(arrayBuffer, args, inName, outName, { onStatus, onProgress }) {
   const ff = await getFFmpeg(onStatus);
-  const handler = ({ progress }) => onProgress?.(Math.max(0, Math.min(progress || 0, 1)));
-  ff.on?.('progress', handler);
+  const onProg = ({ progress }) => onProgress?.(Math.max(0, Math.min(progress || 0, 1)));
+  const onLog = ({ message }) => {
+    ffmpegLog.push(message);
+    if (ffmpegLog.length > 200) ffmpegLog.shift();
+  };
+  ff.on?.('progress', onProg);
+  ff.on?.('log', onLog);
   try {
     await ff.writeFile(inName, new Uint8Array(arrayBuffer));
     const code = await ff.exec(args);
-    if (code !== 0 && code !== undefined) throw new Error('변환 실패');
+    if (code !== 0 && code !== undefined) {
+      throw new Error('FFmpeg 종료 코드 ' + code);
+    }
     const data = await ff.readFile(outName);
+    if (!data || !data.byteLength) throw new Error('변환 결과가 비어 있습니다.');
     const buf = data.buffer ? data.buffer.slice(0) : data;
-    try { await ff.deleteFile(inName); await ff.deleteFile(outName); } catch { }
     return buf;
   } finally {
-    ff.off?.('progress', handler);
+    // 정리 실패는 무시한다. 다음 실행에서 어차피 덮어쓴다.
+    for (const name of [inName, outName]) {
+      try { await ff.deleteFile(name); } catch { }
+    }
+    ff.off?.('progress', onProg);
+    ff.off?.('log', onLog);
   }
+}
+
+/** 실패했을 때 원인을 콘솔에만 남긴다. 사용자에게는 수식도 영어도 보이지 않는다. */
+function reportFFmpegFailure(err) {
+  console.error('[FFmpeg 실패]', err);
+  if (ffmpegLog.length) console.error('[FFmpeg 로그]\n' + ffmpegLog.slice(-40).join('\n'));
 }
 
 /* ---------------- 본 처리 ---------------- */
@@ -102,6 +122,7 @@ export async function loadVideo(file, { onStatus, onProgress } = {}) {
     // 파싱은 됐지만 코덱 미지원 → 트랙 C
     return { demuxed: await transcode(original, file, { onStatus, onProgress }), track: 'C' };
   } catch (parseErr) {
+    console.warn('[트랙 A 실패] mp4box 파싱 단계:', parseErr);
     // ── 트랙 B ──
     onStatus?.('영상 형식을 변환하고 있습니다…');
     onProgress?.(0.1);
@@ -117,7 +138,9 @@ export async function loadVideo(file, { onStatus, onProgress } = {}) {
         onProgress?.(1);
         return { demuxed: d2, track: 'B' };
       }
-    } catch { /* 리먹싱 실패 → 트랜스코딩 */ }
+    } catch (remuxErr) {
+      console.warn('[트랙 B 실패] 리먹싱 단계:', remuxErr);
+    }
 
     // ── 트랙 C ──
     return { demuxed: await transcode(original, file, { onStatus, onProgress }), track: 'C' };
@@ -132,9 +155,13 @@ async function transcode(arrayBuffer, file, { onStatus, onProgress }) {
       '-pix_fmt', 'yuv420p', '-movflags', '+faststart', 'output.mp4'],
     'input.bin', 'output.mp4',
     { onStatus, onProgress: (p) => onProgress?.(0.1 + p * 0.85) }
-  ).catch(() => { throw new Error('이 영상 파일을 읽을 수 없습니다. 다른 영상으로 시도해 주세요.'); });
+  ).catch((err) => {
+    reportFFmpegFailure(err);
+    throw new Error('이 영상 파일을 읽을 수 없습니다. 다른 영상으로 시도해 주세요.');
+  });
 
-  const d = await demux(out).catch(() => {
+  const d = await demux(out).catch((err) => {
+    console.error('[트랙 C 실패] 변환은 됐지만 다시 읽지 못했습니다:', err);
     throw new Error('이 영상 파일을 읽을 수 없습니다. 다른 영상으로 시도해 주세요.');
   });
   if (!(await isSupportedConfig(d.config))) {

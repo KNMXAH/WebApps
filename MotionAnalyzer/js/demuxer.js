@@ -42,43 +42,52 @@ export async function demux(arrayBuffer) {
   const MP4Box = await loadMp4Box();
 
   const file = MP4Box.createFile();
-  const info = await new Promise((resolve, reject) => {
-    file.onError = (e) => reject(new Error('영상 컨테이너를 읽지 못했습니다: ' + e));
-    file.onReady = (i) => resolve(i);
-    const buf = arrayBuffer.slice(0); // mp4box 가 소유권을 가져가므로 복사본을 넘긴다
-    buf.fileStart = 0;
-    file.appendBuffer(buf);
-    file.flush();
-    // onReady 가 끝내 호출되지 않으면 실패로 본다
-    setTimeout(() => reject(new Error('영상 컨테이너를 읽지 못했습니다(시간 초과).')), 15000);
-  });
 
-  const vtrack = (info.videoTracks || [])[0];
-  if (!vtrack) throw new Error('이 파일에는 영상 트랙이 없습니다.');
-
-  const description = extractDescription(MP4Box, file, vtrack.id);
-
-  // 샘플 전체 추출
-  const rawSamples = await new Promise((resolve, reject) => {
+  // 중요: setExtractionOptions/start 는 반드시 onReady 안에서, flush 이전에 호출해야 한다.
+  // mp4box 는 파싱이 끝난 mdat 버퍼를 정리하므로, 나중에 부르면 샘플 데이터가 이미 사라진다.
+  const parsed = await new Promise((resolve, reject) => {
     const acc = [];
+    let info = null, vtrack = null, description = null, failed = null;
+
+    file.onError = (e) => { failed = new Error('영상 컨테이너를 읽지 못했습니다: ' + e); };
+
+    file.onReady = (i) => {
+      info = i;
+      vtrack = (i.videoTracks || [])[0];
+      if (!vtrack) { failed = new Error('이 파일에는 영상 트랙이 없습니다.'); return; }
+      description = extractDescription(MP4Box, file, vtrack.id);
+      file.setExtractionOptions(vtrack.id, null, { nbSamples: 500 });
+      file.start();
+    };
+
     file.onSamples = (_id, _user, samples) => {
+      let last = 0;
       for (const s of samples) {
         acc.push({
           cts: s.cts, dts: s.dts, timescale: s.timescale,
-          isKey: !!s.is_sync, data: s.data
+          isKey: !!s.is_sync,
+          data: new Uint8Array(s.data)   // mp4box 내부 버퍼를 재사용하므로 즉시 복사
         });
+        last = s.number;
       }
+      // 이미 복사했으므로 mp4box 쪽 메모리는 놓아준다
+      try { file.releaseUsedSamples(_id, last + 1); } catch { }
     };
-    file.onError = (e) => reject(new Error('샘플을 읽지 못했습니다: ' + e));
-    file.setExtractionOptions(vtrack.id, null, { nbSamples: Number.MAX_SAFE_INTEGER });
-    file.start();
+
+    const buf = arrayBuffer.slice(0);   // mp4box 가 소유권을 가져가므로 복사본을 넘긴다
+    buf.fileStart = 0;
+    file.appendBuffer(buf);
     file.flush();
-    // onSamples 는 동기적으로 이미 호출되었다
-    setTimeout(() => acc.length ? resolve(acc) : reject(new Error('영상에서 프레임을 찾지 못했습니다.')), 0);
+
+    if (failed) return reject(failed);
+    if (!vtrack) return reject(new Error('영상 컨테이너를 읽지 못했습니다.'));
+    if (!acc.length) return reject(new Error('영상에서 프레임을 찾지 못했습니다.'));
+    resolve({ info, vtrack, description, samples: acc });
   });
 
-  file.stop();
-  file.flush();
+  const { info, vtrack, description, samples: rawSamples } = parsed;
+
+  try { file.stop(); } catch { }
 
   // ---- 디코딩 순서(=파일 순서) 자료 만들기 ----
   const n = rawSamples.length;
