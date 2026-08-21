@@ -1,0 +1,1198 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>원소기호 맞히기 퀴즈 웹앱</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 1. 화면 전체 흔들림 애니메이션 */
+        @keyframes shake {
+            0% { transform: translate(1px, 1px) rotate(0deg); }
+            20% { transform: translate(-3px, 0px) rotate(1deg); }
+            40% { transform: translate(1px, -1px) rotate(1deg); }
+            60% { transform: translate(-3px, 1px) rotate(0deg); }
+            80% { transform: translate(-1px, -1px) rotate(1deg); }
+            100% { transform: translate(1px, -2px) rotate(-1deg); }
+        }
+        .pow-mode-shake {
+            animation: shake 0.4s;
+        }
+        
+        .shake-effect {
+            animation: shake 0.3s ease-in-out;
+        }
+
+        /* 2. 팡팡 터지는 파티클(입자) 스타일 */
+        .particle {
+            position: absolute;
+            pointer-events: none;
+            border-radius: 50%;
+            z-index: 50;
+            opacity: 0;
+        }
+        @keyframes pop {
+            0% { transform: translate(0, 0) scale(1); opacity: 1; }
+            100% { transform: translate(var(--x), var(--y)) scale(0); opacity: 0; }
+        }
+        @keyframes microShake {
+            0%, 100% { transform: translate(0, 0); }
+            25% { transform: translate(-1px, 1px); }
+            75% { transform: translate(1px, -1px); }
+        }
+        .micro-shake {
+            animation: microShake 0.15s ease-in-out;
+        }
+    </style>
+    <!-- QR Code 생성용 라이브러리 -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+</head>
+<body class="bg-slate-100 min-h-screen flex items-center justify-center p-4">
+
+    <div class="bg-white w-full max-w-2xl rounded-2xl shadow-xl p-6 md:p-8">
+        <h1 class="text-2xl font-bold text-center text-indigo-600 mb-6">원소기호 퀴즈</h1>
+
+        <!-- 1. 로그인 화면 (아이디/비밀번호 전용) -->
+        <div id="auth-screen" class="space-y-4">
+            <h2 class="text-lg font-semibold text-slate-700">로그인 및 회원가입</h2>
+            <input type="text" id="username" placeholder="아이디 입력 (예: student1)" class="w-full p-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+            <input type="password" id="password" placeholder="비밀번호 입력 (6글자 이상)" class="w-full p-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+            <div class="flex gap-2">
+                <button onclick="handleLogin()" class="flex-1 bg-indigo-600 text-white p-3 rounded-lg font-semibold hover:bg-indigo-700">로그인</button>
+                <button onclick="handleSignup()" class="flex-1 bg-slate-600 text-white p-3 rounded-lg font-semibold hover:bg-slate-700">회원가입</button>
+            </div>
+        </div>
+
+        <!-- 2. 대시보드 화면 (로그인 후) -->
+        <div id="dashboard-screen" class="hidden space-y-4">
+            <div class="flex justify-between items-center bg-indigo-50 p-4 rounded-lg">
+                <span id="user-display" class="font-medium text-indigo-900"></span>
+                <button onclick="handleLogout()" class="text-sm text-red-600 hover:underline">로그아웃</button>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <button onclick="showSingleMenu()" class="p-6 bg-emerald-500 text-white rounded-xl font-bold text-lg hover:bg-emerald-600 shadow">싱글 모드</button>
+                <button onclick="showMultiMode()" class="p-6 bg-amber-500 text-white rounded-xl font-bold text-lg hover:bg-amber-600 shadow">멀티 모드 (방 만들기/입장)</button>
+                <button onclick="showRanking()" class="md:col-span-2 p-4 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 shadow">🏆 전체 랭킹 보기</button>
+            </div>
+        </div>
+
+        <!-- 3-1. 싱글 모드 선택 화면 -->
+        <div id="single-menu-screen" class="hidden space-y-4">
+            <button onclick="backToDashboard()" class="text-sm text-slate-500 hover:underline">← 뒤로 가기</button>
+            <h2 class="text-lg font-semibold text-slate-700">싱글 모드 선택</h2>
+            <div class="grid grid-cols-1 gap-3">
+                <button onclick="startSingleGame('symbol')" class="p-4 bg-emerald-100 text-emerald-800 rounded-xl font-bold hover:bg-emerald-200">원소기호 모드 (기호 보고 이름 맞히기)</button>
+                <button onclick="startSingleGame('element')" class="p-4 bg-emerald-100 text-emerald-800 rounded-xl font-bold hover:bg-emerald-200">원소 모드 (이름 보고 기호 맞히기)</button>
+                <button onclick="startSingleGame('mixed')" class="p-4 bg-emerald-100 text-emerald-800 rounded-xl font-bold hover:bg-emerald-200">혼합 모드 (랜덤 출제)</button>
+            </div>
+        </div>
+
+        <!-- 3-2. 싱글 모드 게임 플레이 화면 -->
+        <div id="single-game-screen" class="hidden space-y-4 text-center">
+            <div class="flex justify-between items-center bg-slate-100 p-3 rounded-lg font-bold">
+                <span id="game-timer" class="text-red-500">남은 시간: 30초</span>
+                <span id="game-score" class="text-indigo-600">점수: 0점</span>
+            </div>
+            <div id="quiz-card-box" class="relative p-8 bg-indigo-50 rounded-2xl border border-indigo-100 space-y-2">
+                <p class="text-sm text-slate-500" id="game-mode-label">모드</p>
+                <h3 id="quiz-question" class="text-4xl font-extrabold text-indigo-900 my-4">H</h3>
+                <input type="text" id="quiz-answer-input" placeholder="정답을 입력하고 엔터!" onkeydown="checkAnswer(event)" oninput="handleTypingEffect(event)" class="w-full max-w-xs p-3 border-2 border-indigo-300 rounded-xl text-center text-xl font-bold focus:outline-none focus:border-indigo-600">
+            </div>
+            <button onclick="endSingleGame()" class="text-sm text-red-500 hover:underline">그만하기 (종료)</button>
+        </div>
+
+        <!-- 4. 멀티모드 방 관리 화면 -->
+        <div id="multi-screen" class="hidden space-y-4">
+            <button onclick="backToDashboard()" class="text-sm text-slate-500 hover:underline">← 뒤로 가기</button>
+            <h2 class="text-lg font-semibold text-slate-700">멀티플레이어 방</h2>
+            <div class="flex gap-2">
+                <button onclick="createRoom()" class="flex-1 bg-blue-600 text-white p-3 rounded-lg font-semibold hover:bg-blue-700">방 만들기 (교사용)</button>
+                <input type="text" id="room-code-input" placeholder="방 코드 6자리" class="p-3 border rounded-lg w-36 uppercase text-center font-bold">
+                <button onclick="joinRoom()" class="bg-green-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-green-700">입장</button>
+            </div>
+            <!-- 방 정보 및 대기실 영역 -->
+            <div id="room-info-area" class="hidden space-y-4 p-4 bg-slate-50 rounded-xl border">
+                <div class="text-center space-y-2">
+                    <p class="font-bold text-indigo-700">방 코드: <span id="display-room-code" class="text-2xl"></span></p>
+                    <canvas id="qrcode-canvas" class="mx-auto"></canvas>
+                    <p class="text-xs text-slate-500">학생들에게 QR코드를 보여주거나 코드를 공유하세요.</p>
+                </div>
+                <!-- [추가] 제한 시간 설정 -->
+                <div id="time-limit-setting-area" class="mb-4">
+                    <label class="block text-sm font-bold text-slate-700">제한 시간 (초)</label>
+                    <input type="number" id="room-time-limit" value="30" class="w-full p-2 border rounded-lg font-medium mt-1">
+                </div>
+                <!-- 교사용 모드 선택 설정 -->
+                <div id="host-settings" class="hidden space-y-2 bg-white p-4 rounded-lg border">
+                    <label class="block text-sm font-bold text-slate-700">게임 모드 선택 (방장 전용)</label>
+                    <select id="room-mode-select" class="w-full p-2 border rounded-lg font-medium">
+                        <option value="symbol">원소기호 모드 (기호 보고 이름 맞히기)</option>
+                        <option value="element">원소 모드 (이름 보고 기호 맞히기)</option>
+                        <option value="mixed">혼합 모드 (랜덤 출제)</option>
+                    </select>
+                    <button onclick="startMultiGameHost()" class="w-full bg-indigo-600 text-white p-3 rounded-lg font-bold hover:bg-indigo-700 mt-2">게임 시작하기</button>
+                </div>
+                <div class="space-y-1">
+                    <h3 class="font-bold text-slate-700">참가한 학생 명단 (<span id="participant-count">0</span>명)</h3>
+                    <ul id="participant-list" class="bg-white p-3 rounded-lg border max-h-32 overflow-y-auto text-sm space-y-1"></ul>
+                </div>
+                <p id="waiting-msg" class="text-center text-sm font-semibold text-amber-600 hidden">방장이 게임을 시작하기를 기다리는 중입니다...</p>
+            </div>
+        </div>
+
+        <!-- 5. 멀티 모드 실시간 게임 플레이 화면 -->
+        <div id="multi-game-screen" class="hidden space-y-4">
+            <!-- [추가] 방장 강제 종료 버튼 -->
+            <div id="host-controls" class="hidden absolute top-4 right-4 z-50">
+                <button onclick="forceFinishGame()" class="bg-red-600 text-white px-4 py-2 rounded-lg font-bold shadow-lg hover:bg-red-700">게임 강제 종료</button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div class="md:col-span-3 space-y-4 text-center">
+                    <div class="flex justify-between items-center bg-slate-100 p-3 rounded-lg font-bold">
+                        <span id="multi-game-timer" class="text-red-500">남은 시간: 30초</span>
+                        <span id="multi-game-score" class="text-indigo-600">점수: 0점</span>
+                    </div>
+                    <!-- 카운트다운 오버레이 박스 -->
+                    <div id="multi-card-box" class="relative p-12 bg-indigo-50 rounded-2xl border border-indigo-100 flex flex-col items-center justify-center min-h-[220px]">
+                        <div id="countdown-overlay" class="absolute inset-0 bg-indigo-900/80 rounded-2xl flex items-center justify-center text-white text-6xl font-extrabold z-20 hidden">3</div>
+                        <p class="text-sm text-slate-500" id="multi-mode-label">멀티 모드</p>
+                        <h3 id="multi-quiz-question" class="text-5xl font-extrabold text-indigo-900 my-4">-</h3>
+                        <input type="text" id="multi-quiz-answer-input" placeholder="정답을 입력하고 엔터!" onkeydown="checkMultiAnswer(event)" oninput="handleTypingEffect(event)" class="w-full max-w-xs p-3 border-2 border-indigo-300 rounded-xl text-center text-xl font-bold focus:outline-none focus:border-indigo-600">
+                    </div>
+                </div>
+                <!-- 우측 실시간 순위표 -->
+                <div class="bg-slate-50 p-4 rounded-xl border space-y-2">
+                    <h3 class="font-bold text-slate-700 text-center border-b pb-2">📊 실시간 점수판</h3>
+                    <div id="live-scoreboard" class="space-y-1 max-h-60 overflow-y-auto text-sm"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 6. 멀티 모드 최종 랭킹 화면 -->
+        <div id="multi-result-screen" class="hidden space-y-4 max-w-md mx-auto text-center">
+            <h2 class="text-2xl font-extrabold text-indigo-600">🎉 멀티 퀴즈 결과!</h2>
+            <div id="final-ranking-list" class="bg-slate-50 p-4 rounded-xl border space-y-2 text-left"></div>
+            <button onclick="backToDashboard()" class="w-full bg-indigo-600 text-white p-3 rounded-lg font-bold hover:bg-indigo-700">대시보드로 돌아가기</button>
+        </div>
+
+        <!-- 7. 랭킹 화면 -->
+        <div id="ranking-screen" class="hidden space-y-4">
+            <button onclick="backToDashboard()" class="text-sm text-slate-500 hover:underline">← 뒤로 가기</button>
+            <h2 class="text-lg font-semibold text-slate-700">🏆 명예의 전당 (모드별 랭킹)</h2>
+            
+            <!-- 모드 선택 탭 버튼 -->
+            <div class="flex gap-2">
+                <button onclick="loadRanking('symbol')" id="tab-symbol" class="flex-1 py-2 px-3 bg-indigo-600 text-white rounded-lg text-sm font-bold">원소기호 모드</button>
+                <button onclick="loadRanking('element')" id="tab-element" class="flex-1 py-2 px-3 bg-slate-200 text-slate-700 rounded-lg text-sm font-bold">원소 모드</button>
+                <button onclick="loadRanking('mixed')" id="tab-mixed" class="flex-1 py-2 px-3 bg-slate-200 text-slate-700 rounded-lg text-sm font-bold">혼합 모드</button>
+            </div>
+
+            <div id="ranking-list" class="divide-y border rounded-xl p-4 max-h-60 overflow-y-auto">
+                <!-- 랭킹 리스트가 동적으로 들어감 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK (버전 12.18.0) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
+        import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, updateDoc, collection, addDoc, getDocs, query, orderBy, limit, onSnapshot, where, arrayUnion, deleteDoc } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
+
+        // 🔥 본인의 Firebase 설정값으로 변경하세요
+        // For Firebase JS SDK v7.20.0 and later, measurementId is optional
+        const firebaseConfig = {
+            apiKey: "AIzaSyDK60Ru0OMo-CphHvsWIAp982arivZiS0Y",
+            authDomain: "element-symbols-quiz.firebaseapp.com",
+            projectId: "element-symbols-quiz",
+            storageBucket: "element-symbols-quiz.firebasestorage.app",
+            messagingSenderId: "603609710793",
+            appId: "1:603609710793:web:02e5934ad24cf9d6144d18",
+            measurementId: "G-0Q17X426QX"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        let currentUser = null;
+        const DOMAIN = "@element.quiz"; // 아이디 로그인을 위한 내부 가상 도메인
+        // 원소 데이터베이스 예시 (원하시는 만큼 추가/수정 가능)
+        const elementData = [
+            { number: 1, symbol: "H", name: "수소" , count: 1 },
+            { number: 2, symbol: "He", name: "헬륨" , count: 1 },
+            { number: 3, symbol: "Li", name: "리튬" , count: 1 },
+            { number: 4, symbol: "Be", name: "베릴륨" , count: 1 },
+            { number: 5, symbol: "B", name: "붕소" , count: 1 },
+            { number: 6, symbol: "C", name: "탄소" , count: 1 },
+            { number: 7, symbol: "N", name: "질소" , count: 1 },
+            { number: 8, symbol: "O", name: "산소" , count: 1 },
+            { number: 9, symbol: "F", name: "플루오린" , count: 1 },
+            { number: 10, symbol: "Ne", name: "네온" , count: 1 },
+            { number: 11, symbol: "Na", name: "나트륨" , count: 1 },
+            { number: 12, symbol: "Mg", name: "마그네슘" , count: 1 },
+            { number: 13, symbol: "Al", name: "알루미늄" , count: 1 },
+            { number: 14, symbol: "Si", name: "규소" , count: 1 },
+            { number: 15, symbol: "P", name: "인" , count: 1 },
+            { number: 16, symbol: "S", name: "황" , count: 1 },
+            { number: 17, symbol: "Cl", name: "염소" , count: 1 },
+            { number: 18, symbol: "Ar", name: "아르곤" , count: 1 },
+            { number: 19, symbol: "K", name: "칼륨" , count: 1 },
+            { number: 20, symbol: "Ca", name: "칼슘" , count: 1 }
+            // 필요에 따라 20번, 30번 원소까지 계속 추가하실 수 있습니다!
+        ];
+
+        // 싱글모드 변수
+        let currentGameMode = 'symbol';
+        let currentScore = 0;
+        let timeLeft = 30;
+        let timerInterval = null;
+        let currentElement = null;
+
+        // 멀티 모드 전용 변수들
+        let currentRoomCode = null;
+        let isHost = false;
+        let multiUnsubscribe = null;
+        let multiTimerInterval = null;
+        let multiTimeLeft = 30;
+        let timeLimit = 30;
+        let multiCurrentScore = 0;
+        let multiQuestionIndex = 0;
+        let multiQuestionsList = [];
+        let multiGameMode = 'symbol';
+        
+        function softmax(arr, temperature = 1.0) {
+            // 0으로 나누는 것을 방지하기 위해 아주 작은 값 보정
+            const temp = Math.max(temperature, 0.0001);
+            
+            // 1. 각 값에 temperature를 나눔 (오버플로우 방지용 max 값은 나누기 후에 적용하거나 전에 적용)
+            const scaledArr = arr.map(x => x / temp);
+            const max = Math.max(...scaledArr);
+            
+            // 2. 지수 함수 적용
+            const exps = scaledArr.map(x => Math.exp(x - max));
+            const sum = exps.reduce((a, b) => a + b, 0);
+            
+            // 3. 확률 배열 반환
+            return exps.map(x => x / sum);
+        }
+
+        // 인증 상태 감지
+        let userRole = 'student'; // 전역 변수로 역할 저장
+
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                currentUser = user;
+                const rawUsername = user.email.replace(DOMAIN, '');
+                
+                // 🔥 Firestore에서 유저 권한 정보 가져오기
+                const userDocRef = doc(db, "users", user.uid);
+                const userDocSnap = await getDoc(userDocRef);
+                
+                if (userDocSnap.exists()) {
+                    userRole = userDocSnap.data().role; // 'teacher' 또는 'student'
+                } else {
+                    // 만약 기존 가입 유저라 데이터가 없다면 관리자 목록 기준으로 재판별 후 저장
+                    userRole = ADMIN_EMAILS.includes(user.email) ? 'teacher' : 'student';
+                    await setDoc(userDocRef, { email: user.email, role: userRole, createdAt: new Date() }, { merge: true });
+                }
+
+                document.getElementById('user-display').innerText = `${rawUsername}님 환영합니다! (${userRole === 'teacher' ? '교사' : '학생'})`;
+                
+                // 🔥 학생 계정일 경우 멀티 모드 화면의 '방 만들기' 버튼 숨기기
+                const createRoomBtn = document.querySelector('button[onclick="createRoom()"]');
+                if (createRoomBtn) {
+                    createRoomBtn.style.display = (userRole === 'teacher') ? 'block' : 'none';
+                }
+
+                switchScreen('dashboard-screen');
+            } else {
+                currentUser = null;
+                userRole = 'student';
+                switchScreen('auth-screen');
+            }
+        });
+
+        // 화면 전환 헬퍼 함수
+        window.switchScreen = function(screenId) {
+            // 배열에 'multi-game-screen', 'multi-result-screen' 추가
+            ['auth-screen', 'dashboard-screen', 'single-menu-screen', 'single-game-screen', 'multi-screen', 'multi-game-screen', 'multi-result-screen', 'ranking-screen'].forEach(id => {
+                document.getElementById(id).classList.add('hidden');
+            });
+            document.getElementById(screenId).classList.remove('hidden');
+        }
+
+        window.backToDashboard = async () => {
+            clearInterval(timerInterval);
+            clearInterval(multiTimerInterval);
+
+            // 🔥 방에 참여 중이었던 경우 처리
+            if (currentRoomCode) {
+                const roomRef = doc(db, "rooms", currentRoomCode);
+                try {
+                    if (isHost) {
+                        // 방장이 나가면 방 자체를 삭제하여 빈 방에 남는 문제 원천 차단
+                        await deleteDoc(roomRef);
+                    } else {
+                        // 일반 참가자가 나가면 방의 participants 목록에서 내 정보 제거
+                        const roomSnap = await getDoc(roomRef);
+                        if (roomSnap.exists()) {
+                            const data = roomSnap.data();
+                            // 현재 로그인한 유저의 email이나 고유값과 다른 참가자들만 남김
+                            // 일반 참가자가 나갈 때 본인을 제외하는 로직 예시
+                            const updatedParticipants = (data.participants || []).filter(p => p.uid !== currentUser.uid);
+                            await updateDoc(roomRef, { participants: updatedParticipants });
+                        }
+                    }
+                } catch (e) {
+                    console.error("방 나가기 처리 중 오류:", e);
+                }
+            }
+
+            if (multiUnsubscribe) multiUnsubscribe(); // 실시간 리스너 해제
+            currentScore = 0;
+            currentRoomCode = null;
+            isHost = false;
+
+            const singleInput = document.getElementById('quiz-answer-input');
+            const multiInput = document.getElementById('multi-quiz-answer-input');
+            if (singleInput) singleInput.value = '';
+            if (multiInput) multiInput.value = '';
+            
+            switchScreen('dashboard-screen');
+        };
+        
+        const ADMIN_EMAILS = ["XAH@element.quiz"];
+        
+        // 회원가입 (아이디 + 비밀번호)
+        window.handleSignup = async () => {
+            const userInput = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            if(!userInput || !password) return showModal('입력 오류', '아이디와 비밀번호를 모두 입력해주세요.');
+            
+            const email = userInput + DOMAIN;
+
+            try {
+                const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                const user = userCredential.user;
+
+                // 🔥 이메일이 관리자 목록에 있으면 'teacher', 아니면 'student'로 역할 부여
+                const assignedRole = ADMIN_EMAILS.includes(email) ? 'teacher' : 'student';
+
+                // Firestore의 'users' 컬렉션에 정보 저장
+                await setDoc(doc(db, "users", user.uid), {
+                    email: email,
+                    role: assignedRole,
+                    createdAt: new Date()
+                });
+
+                showModal('성공', `회원가입 성공! (${assignedRole === 'teacher' ? '교사' : '학생'} 계정으로 등록됨)`);
+            } catch (error) {
+                showModal('회원가입 실패', error.message);
+            }
+        };
+
+        // 로그인 (아이디 + 비밀번호)
+        window.handleLogin = async () => {
+            const userInput = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            
+            if(!userInput || !password) {
+                showModal('아이디와 비밀번호를 모두 입력해주세요.', "");
+                return;
+            }
+
+            const email = userInput + DOMAIN;
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+            } catch (error) {
+                showModal('로그인 실패: 아이디와 비밀번호를 확인해주세요.', "");
+            }
+        };
+
+        // 로그아웃
+        window.handleLogout = () => signOut(auth);
+
+        // 네비게이션 버튼 동작들
+        // 싱글 모드 메뉴 열기
+        window.showSingleMenu = () => switchScreen('single-menu-screen');
+
+        // 싱글 게임 시작
+        window.startSingleGame = (mode) => {
+            currentGameMode = mode;
+            currentScore = 0;
+            timeLeft = 30;
+            document.getElementById('game-score').innerText = `점수: ${currentScore}점`;
+            document.getElementById('game-timer').innerText = `남은 시간: ${timeLeft}초`;
+            
+            let modeNameText = mode === 'symbol' ? '원소기호 모드' : mode === 'element' ? '원소 모드' : '혼합 모드';
+            document.getElementById('game-mode-label').innerText = modeNameText;
+
+            switchScreen('single-game-screen');
+            nextQuestion();
+
+            clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                document.getElementById('game-timer').innerText = `남은 시간: ${timeLeft}초`;
+                if (timeLeft <= 0) {
+                    clearInterval(timerInterval);
+                    finishSingleGame();
+                }
+            }, 1000);
+        };
+
+        // 다음 문제 출제
+        function nextQuestion() {
+            // 1. 각 원소의 count에 마이너스를 붙여서 Softmax 입력값 생성 (많이 나올수록 선택 확률 낮아짐)
+            // 섭씨/화씨나 온도 조절처럼 조절 계수(temperature)를 곱해줄 수도 있습니다 (예: / 1.0)
+            const logits = elementData.map(el => -el.count);
+            const probabilities = softmax(logits, 0.8);
+
+            // 2. 확률 분포에 따라 랜덤하게 하나의 원소 선택
+            let randomVal = Math.random();
+            let accumulatedProb = 0;
+            let selectedIndex = 0;
+
+            for (let i = 0; i < probabilities.length; i++) {
+                accumulatedProb += probabilities[i];
+                if (randomVal <= accumulatedProb) {
+                    selectedIndex = i;
+                    break;
+                }
+            }
+
+            currentElement = elementData[selectedIndex];
+            let displayMode = currentGameMode;
+            
+            if (currentGameMode === 'mixed') {
+                displayMode = Math.random() < 0.5 ? 'symbol' : 'element';
+            }
+
+            const questionEl = document.getElementById('quiz-question');
+            if (displayMode === 'symbol') {
+                questionEl.dataset.type = 'symbol';
+                questionEl.innerText = currentElement.symbol;
+            } else {
+                questionEl.dataset.type = 'element';
+                questionEl.innerText = currentElement.name;
+            }
+
+            document.getElementById('quiz-answer-input').value = '';
+            document.getElementById('quiz-answer-input').focus();
+        }
+
+
+
+        // ⌨️ 한글, 영어, 백스페이스 등 모든 타이핑에 반응하는 이펙트 함수
+        window.handleTypingEffect = (event) => {
+            // 한글 조합 중이거나 글자가 입력/삭제될 때 미니 파티클 발동
+            triggerMiniPowerMode();
+        };
+
+        window.endSingleGame = () => {
+            clearInterval(timerInterval);
+            finishSingleGame();
+        };
+
+        async function saveBestScore(mode, score) {
+            const scoreDocId = `${currentUser.uid}_${mode}`;
+            const scoreRef = doc(db, "scores", scoreDocId);
+            try {
+                const docSnap = await getDoc(scoreRef);
+                let saveScore = score;
+                if (docSnap.exists() && docSnap.data().score > score) {
+                    saveScore = docSnap.data().score;
+                }
+                await setDoc(scoreRef, {
+                    email: currentUser.email,
+                    mode: mode,
+                    score: saveScore,
+                    updatedAt: new Date()
+                });
+            } catch (e) {
+                console.error("점수 저장 실패:", e);
+            }
+        }
+
+        // 멀티모드 열기
+        window.showMultiMode = () => {
+            switchScreen('multi-screen');
+            document.getElementById('room-info-area').classList.add('hidden');
+            document.getElementById('host-settings').classList.add('hidden');
+            document.getElementById('waiting-msg').classList.add('hidden');
+        };
+
+        // 3. 교사용 방 생성 및 QR 코드 생성
+        window.createRoom = async () => {
+            // 1. 교사 권한 검증
+            if (userRole !== 'teacher') {
+                showModal('권한 없음', '교사 계정만 방을 만들 수 있습니다.');
+                return;
+            }
+
+            isHost = true;
+            currentRoomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+            
+            // 2. 화면에 방 코드 표시
+            document.getElementById('display-room-code').innerText = currentRoomCode;
+            
+            // 3. 🔥 [핵심] 숨겨져 있던 방 정보 영역 및 교사 설정 영역을 강제로 화면에 표시!
+            console.log("create room에서 host-settings 보이기 실행")
+            document.getElementById('room-info-area').classList.remove('hidden');
+            document.getElementById('host-settings').classList.remove('hidden');
+            document.getElementById('waiting-msg').classList.add('hidden'); // 교사 화면에선 학생 대기 메시지 숨김
+            
+
+            // 4. Firestore에 방 생성 초기 데이터 저장
+            const rawName = currentUser.email.replace(DOMAIN, '');
+            timeLimit = parseInt(document.getElementById('room-time-limit').value) || 30;
+            await setDoc(doc(db, "rooms", currentRoomCode), {
+                host: rawName,
+                status: "waiting",
+                mode: "symbol",
+                participants: [{ uid: currentUser.uid, name: rawName, score: 0 }],
+                createdAt: new Date(),
+                timeLimit: timeLimit
+            });
+
+            // 5. QR 코드 생성
+            const qrCanvas = document.getElementById('qrcode-canvas');
+            qrCanvas.style.display = 'block';
+            QRCode.toCanvas(qrCanvas, currentRoomCode, { width: 150 }, function (error) {
+                if (error) console.error(error);
+            });
+
+            // 6. 실시간 동기화 리스너 연결 (이 부분이 있어야 학생이 들어올 때 교사 화면도 업데이트됨)
+            listenRoomState(currentRoomCode);
+        };
+
+        window.joinRoom = async () => {
+            isHost = false;
+            const code = document.getElementById('room-code-input').value.toUpperCase().trim();
+            if(!code) return showModal('알림', '방 코드를 입력하세요.');
+            currentRoomCode = code;
+
+            const roomRef = doc(db, "rooms", currentRoomCode);
+            const roomSnap = await getDoc(roomRef);
+            if (!roomSnap.exists()) return showModal('알림', '존재하지 않는 방 코드입니다.');
+
+            const rawName = currentUser.email.replace(DOMAIN, '');
+            const roomData = roomSnap.data();
+            if (roomData.status !== "waiting") return showModal('알림', '이미 게임이 시작되었거나 종료된 방입니다.');
+
+            // 오래된 방 접속 차단
+            const createdAt = roomData.createdAt ? roomData.createdAt.toDate() : new Date();
+            const now = new Date();
+            const hoursPassed = (now - createdAt) / (1000 * 60 * 60);
+
+            if (hoursPassed > 2) {
+                // 2시간이 지난 방이면 데이터베이스에서 삭제하고 입장 차단
+                await deleteDoc(roomRef);
+                showModal('방 만료', '생성된 지 2시간이 지나 만료된 방입니다. 교사에게 새 방 생성을 요청하세요.');
+                return;
+            }
+
+            // participants가 없더라도 에러가 안 나게 빈 배열([]) 처리
+            const participants = roomData.participants || [];
+            const exists = participants.some(p => p.uid === currentUser.uid);
+
+            if (!exists) {
+                await updateDoc(roomRef, {
+                    participants: arrayUnion({ uid: currentUser.uid, name: rawName, score: 0 })
+                });
+            }
+
+            document.getElementById('display-room-code').innerText = currentRoomCode;
+            document.getElementById('room-info-area').classList.remove('hidden');
+            document.getElementById('host-settings').classList.add('hidden');
+            document.getElementById('time-limit-setting-area').classList.add('hidden');
+            document.getElementById('waiting-msg').classList.remove('hidden');
+            document.getElementById('qrcode-canvas').style.display = 'none';
+            
+
+            listenRoomState(currentRoomCode);
+        };
+
+        // 방 상태 실시간 감지 (참가자 명단 및 게임 시작 동기화)
+        function listenRoomState(roomCode) {
+            if (multiUnsubscribe) multiUnsubscribe();
+            const roomRef = doc(db, "rooms", roomCode);
+            
+            multiUnsubscribe = onSnapshot(roomRef, (docSnap) => {
+                if (!docSnap.exists()) {
+                    // 방이 삭제되면 모든 참가자에게 종료 화면 표시
+                    if (!document.getElementById('multi-result-screen').classList.contains('hidden')) {
+                        // 이미 결과창이면 무시
+                    } else {
+                        // 강제 종료 시 결과창으로 이동 또는 대시보드로 이동
+                        showMultiResult([]); 
+                    }
+                    if (multiUnsubscribe) multiUnsubscribe();
+                    return;
+                }
+                const data = docSnap.data();
+
+                // 참가자 명단 및 실시간 순위판 갱신
+                const listEl = document.getElementById('participant-list');
+                listEl.innerHTML = '';
+                document.getElementById('participant-count').innerText = data.participants.length;
+                data.participants.forEach(p => {
+                    listEl.innerHTML += `<li>👤 ${p.name} (점수: ${p.score})</li>`;
+                });
+
+                const liveBoard = document.getElementById('live-scoreboard');
+                if (liveBoard) {
+                    const sorted = [...data.participants].sort((a, b) => b.score - a.score);
+                    liveBoard.innerHTML = '';
+                    sorted.forEach((p, idx) => {
+                        liveBoard.innerHTML += `<div class="flex justify-between py-1 px-2 border-b"><span>${idx+1}. ${p.name}</span><span class="font-bold text-indigo-600">${p.score}점</span></div>`;
+                    });
+                }
+
+                // 게임 시작 신호 포착
+                if (data.status === "playing" && document.getElementById('multi-game-screen').classList.contains('hidden')) {
+                    multiGameMode = data.mode;
+                    // 4. 모든 플레이어에게 동일한 순서의 문제 제공
+                    multiQuestionsList = generateDeterministicQuestions(roomCode);
+                    startMultiGamePlay();
+                }
+
+                // 게임 종료 포착
+                if (data.status === "finished") {
+                    // 이미 결과 화면이 처리 중이거나 중복 호출되는 것을 방지하기 위해 
+                    // 리스너가 살아있는 동안 한 번만 실행되도록 체크
+                    if (window.isMultiGameFinished) return;
+                    window.isMultiGameFinished = true;
+
+                    // 데이터가 확실히 존재할 때 결과 표시
+                    const participantsData = data.participants || [];
+                    showMultiResult(participantsData);
+                    
+                    if (multiUnsubscribe) {
+                        multiUnsubscribe();
+                        multiUnsubscribe = null;
+                    }
+                    return;
+                }
+            });
+        }
+
+        window.startMultiGameHost = async () => {
+            const selectedMode = document.getElementById('room-mode-select').value;
+            const roomRef = doc(db, "rooms", currentRoomCode);
+            await updateDoc(roomRef, {
+                status: "playing",
+                mode: selectedMode
+            });
+        };
+
+        // 방 코드를 기준으로 동일한 문제 시퀀스를 만드는 해시 함수
+        function generateDeterministicQuestions(seedStr) {
+            let hash = 0;
+            for (let i = 0; i < seedStr.length; i++) {
+                hash = seedStr.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            let seed = Math.abs(hash);
+            function random() {
+                let t = seed += 0x6D2B79F5;
+                t = Math.imul(t ^ t >>> 15, t | 1);
+                t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+                return ((t ^ t >>> 14) >>> 0) / 4294967296;
+            }
+            let shuffled = [...elementData];
+            for (let i = shuffled.length - 1; i > 0; i--) {
+                let j = Math.floor(random() * (i + 1));
+                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+            }
+            return shuffled;
+        }
+
+        // 2. 카운트다운 후 게임 시작
+        function startMultiGamePlay() {
+            switchScreen('multi-game-screen');
+
+            // 방장일 경우 제어권 설정
+            if (isHost) {
+                document.getElementById('host-controls').classList.remove('hidden'); // 버튼 보이기
+                document.getElementById('multi-quiz-answer-input').classList.add('hidden'); // 입력창 숨기기
+                document.getElementById('multi-quiz-question').innerText = "관전 모드: 게임이 진행 중입니다.";
+            } else {
+                document.getElementById('host-controls').classList.add('hidden'); // 버튼 숨기기
+                document.getElementById('multi-quiz-answer-input').classList.remove('hidden'); // 입력창 보이기
+            }
+
+            multiCurrentScore = 0;
+            multiQuestionIndex = 0;
+            multiTimeLeft = timeLimit;
+            document.getElementById('multi-game-score').innerText = `점수: ${multiCurrentScore}점`;
+            document.getElementById('multi-game-timer').innerText = `남은 시간: ${multiTimeLeft}초`;
+            document.getElementById('multi-mode-label').innerText = multiGameMode === 'symbol' ? '원소기호 모드' : multiGameMode === 'element' ? '원소 모드' : '혼합 모드';
+
+            const overlay = document.getElementById('countdown-overlay');
+            overlay.classList.remove('hidden');
+            let count = 3;
+            overlay.innerText = count;
+
+            let cdInterval = setInterval(() => {
+                count--;
+                if (count > 0) {
+                    overlay.innerText = count;
+                } else if (count === 0) {
+                    overlay.innerText = "시작!";
+                } else {
+                    clearInterval(cdInterval);
+                    overlay.classList.add('hidden');
+                    loadMultiNextQuestion();
+                    startMultiTimer();
+                }
+            }, 1000);
+        }
+
+        function startMultiTimer() {
+            clearInterval(multiTimerInterval);
+            multiTimerInterval = setInterval(() => {
+                multiTimeLeft--;
+                document.getElementById('multi-game-timer').innerText = `남은 시간: ${multiTimeLeft}초`;
+                if (multiTimeLeft <= 0) {
+                    clearInterval(multiTimerInterval);
+                    finishMultiGame();
+                }
+            }, 1000);
+        }
+
+        function loadMultiNextQuestion() {
+            if (multiQuestionIndex >= multiQuestionsList.length) multiQuestionIndex = 0;
+            currentElement = multiQuestionsList[multiQuestionIndex];
+            multiQuestionIndex++;
+
+            let displayMode = multiGameMode;
+            if (multiGameMode === 'mixed') {
+                displayMode = (Math.random() < 0.5) ? 'symbol' : 'element';
+            }
+
+            const qEl = document.getElementById('multi-quiz-question');
+            if (displayMode === 'symbol') {
+                qEl.dataset.type = 'symbol';
+                qEl.innerText = currentElement.symbol;
+            } else {
+                qEl.dataset.type = 'element';
+                qEl.innerText = currentElement.name;
+            }
+            document.getElementById('multi-quiz-answer-input').value = '';
+            document.getElementById('multi-quiz-answer-input').focus();
+        }
+
+                // 엔터 키로 정답 체크
+        window.checkAnswer = (event) => {
+            if (event.key === 'Enter') {
+                const userAns = document.getElementById('quiz-answer-input').value.trim();
+                const qType = document.getElementById('quiz-question').dataset.type;
+
+                let isCorrect = false;
+                if (qType === 'symbol') {
+                    if (userAns === currentElement.name) isCorrect = true;
+                } else {
+                    if (userAns === currentElement.symbol) isCorrect = true;
+                }
+
+                if (isCorrect) {
+                    currentScore += 10;
+                    document.getElementById('game-score').innerText = `점수: ${currentScore}점`;
+
+                    currentElement.count += 1;
+                    // 🔥 [추가] 정답 맞혔을 때 Power Mode 이펙트 발동!
+                    triggerPowerMode();
+
+                    nextQuestion();
+                } else {
+                    document.getElementById('quiz-answer-input').value = '';
+
+                    playWrongSound()
+
+                    const cardBox = document.getElementById('quiz-card-box');
+                    cardBox.classList.add('shake-effect'); // 또는 이미 쓰시는 흔들림 클래스명
+                    setTimeout(() => {
+                        cardBox.classList.remove('shake-effect');
+                    }, 300);
+                }
+                return;
+            }
+        };
+
+        window.checkMultiAnswer = async (event) => {
+            // 💡 [추가] 일반 타이핑 시 가벼운 피드백 (키가 눌릴 때마다 실행)
+            const inputEl = document.getElementById('multi-quiz-answer-input');
+
+            // Enter 키 입력 시 정/오답 판정
+            if (event.key === 'Enter') {
+                const userAns = inputEl.value.trim();
+                const qType = document.getElementById('multi-quiz-question').dataset.type;
+                let isCorrect = (qType === 'symbol') ? (userAns === currentElement.name) : (userAns === currentElement.symbol);
+
+                if (isCorrect) {
+                    multiCurrentScore += 10;
+                    document.getElementById('multi-game-score').innerText = `점수: ${multiCurrentScore}점`;
+                    
+                    // 🌟 정답 시 파워모드 발동 (화면 진동 + 사운드 + 파티클)
+                    triggerPowerMode();
+                    
+                    await updateParticipantScore(multiCurrentScore);
+                    loadMultiNextQuestion();
+                } else {
+                    // ❌ 오답 시 좌우 흔들림 효과 부여
+                    playWrongSound()
+                    const cardBox = document.getElementById('multi-card-box') || inputEl;
+                    cardBox.classList.add('shake-effect');
+                    setTimeout(() => {
+                        cardBox.classList.remove('shake-effect');
+                    }, 300);
+
+                    inputEl.value = '';
+                }
+                return;
+            }
+        };
+
+        async function updateParticipantScore(score) {
+            const roomRef = doc(db, "rooms", currentRoomCode);
+            const roomSnap = await getDoc(roomRef);
+            if (!roomSnap.exists()) return;
+            const data = roomSnap.data();
+            const updatedParticipants = data.participants.map(p => {
+                if (p.uid === currentUser.uid) {
+                    return { ...p, score: score };
+                }
+                return p;
+            });
+            await updateDoc(roomRef, { participants: updatedParticipants });
+        }
+
+        
+
+        // 게임 종료 및 최고 점수 Firebase 저장
+        async function finishSingleGame() {
+            showModal(`게임 종료! 총 획득 점수: ${currentScore}점`, "");
+            
+            if (currentUser) {
+                // 문서 ID를 유저uid_모드 형태로 만들어 모드별로 구분
+                const scoreDocId = `${currentUser.uid}_${currentGameMode}`;
+                const scoreRef = doc(db, "scores", scoreDocId);
+                try {
+                    const docSnap = await getDoc(scoreRef);
+                    let saveScore = currentScore;
+                    if (docSnap.exists()) {
+                        const existingScore = docSnap.data().score || 0;
+                        if (existingScore > currentScore) {
+                            saveScore = existingScore; 
+                        }
+                    }
+                    await setDoc(scoreRef, {
+                        email: currentUser.email,
+                        mode: currentGameMode, // 👈 모드 정보 추가 저장
+                        score: saveScore,
+                        updatedAt: new Date()
+                    });
+                } catch (e) {
+                    console.error("점수 저장 실패:", e);
+                }
+            }
+            switchScreen('dashboard-screen');
+        }
+
+        async function finishMultiGame() {
+            clearInterval(multiTimerInterval);
+            
+            const roomRef = doc(db, "rooms", currentRoomCode);
+            
+            try {
+                // 1. 현재 방의 최신 데이터를 가져옴
+                const roomSnap = await getDoc(roomRef);
+                if (roomSnap.exists()) {
+                    const roomData = roomSnap.data();
+                    const participants = roomData.participants || [];
+                    const mode = roomData.mode;
+
+                    // 2. [선택사항] 게임이 끝났으니 각 플레이어의 최종 점수를 개인 랭킹(scores)에 각각 저장
+                    for (const p of participants) {
+                        const userKey = p.uid;
+                        const scoreDocId = `${userKey}_${mode}`;
+                        const scoreRef = doc(db, "scores", scoreDocId);
+
+                        try {
+                            const docSnap = await getDoc(scoreRef);
+                            let saveScore = p.score;
+                            if (docSnap.exists()) {
+                                const existingScore = docSnap.data().score || 0;
+                                if (existingScore > p.score) saveScore = existingScore;
+                            }
+                            const pEmail = p.name + DOMAIN
+                            await setDoc(scoreRef, {
+                                email: pEmail,
+                                mode: mode,
+                                score: saveScore,
+                                updatedAt: new Date()
+                            });
+                        } catch (err) {
+                            console.error(`참가자 ${p.name} 점수 저장 실패:`, err);
+                        }
+                    }
+
+                    // 3. ⭐️ 핵심: 방을 삭제하는 대신 status를 "finished"로 변경하고 최신 참가자 명단 저장!
+                    // 이렇게 하면 onSnapshot을 통해 모든 참가자에게 동시에 finished 상태와 최종 participants 데이터가 전달됩니다.
+                    await updateDoc(roomRef, {
+                        status: "finished",
+                        participants: participants
+                    });
+                }
+            } catch (e) {
+                console.error("멀티게임 종료 처리 오류:", e);
+            }
+        }
+
+
+
+        function showMultiResult(participants) {
+            switchScreen('multi-result-screen');
+            const sorted = [...participants].sort((a, b) => b.score - a.score);
+            const listEl = document.getElementById('final-ranking-list');
+            listEl.innerHTML = '<h3 class="font-bold text-slate-700 mb-2">🏆 최종 순위 발표</h3>';
+            sorted.forEach((p, idx) => {
+                listEl.innerHTML += `<div class="flex justify-between py-2 border-b"><span class="font-bold">${idx+1}위. ${p.name}</span><span class="text-indigo-600 font-semibold">${p.score}점</span></div>`;
+            });
+        }
+
+
+        // 대시보드에서 랭킹 보기를 누를 때 기본으로 'symbol' 모드 랭킹 오픈
+        window.showRanking = async () => {
+            switchScreen('ranking-screen');
+            await loadRanking('symbol');
+        };
+
+        // 특정 모드의 랭킹을 불러와 화면에 렌더링하는 함수
+        window.loadRanking = async (mode) => {
+            // 탭 디자인 활성화/비활성화 처리
+            ['symbol', 'element', 'mixed'].forEach(m => {
+                const tab = document.getElementById(`tab-${m}`);
+                if (m === mode) {
+                    tab.className = "flex-1 py-2 px-3 bg-indigo-600 text-white rounded-lg text-sm font-bold";
+                } else {
+                    tab.className = "flex-1 py-2 px-3 bg-slate-200 text-slate-700 rounded-lg text-sm font-bold";
+                }
+            });
+
+            const rankingListEl = document.getElementById('ranking-list');
+            rankingListEl.innerHTML = '<p class="text-center text-slate-400">불러오는 중...</p>';
+
+            try {
+                // 🔥 모드별 필터링 쿼리 (where("mode", "==", mode) 추가)
+                const q = query(
+                    collection(db, "scores"), 
+                    where("mode", "==", mode), 
+                    orderBy("score", "desc"), 
+                    limit(10)
+                );
+                const querySnapshot = await getDocs(q);
+
+                rankingListEl.innerHTML = '';
+                let rank = 1;
+                querySnapshot.forEach((docSnap) => {
+                    const data = docSnap.data();
+                    const rawName = data.email ? data.email.name || data.email.replace(DOMAIN, '') : '알수없음';
+                    rankingListEl.innerHTML += `
+                        <div class="flex justify-between py-2 px-3">
+                            <span class="font-bold">${rank}위. ${rawName}</span>
+                            <span class="text-indigo-600 font-semibold">${data.score}점</span>
+                        </div>
+                    `;
+                    rank++;
+                });
+
+                if (rank === 1) {
+                    rankingListEl.innerHTML = '<p class="text-center text-slate-400">이 모드에 등록된 랭킹이 없습니다.</p>';
+                }
+            } catch (e) {
+                console.error("랭킹 불러오기 실패:", e);
+                rankingListEl.innerHTML = '<p class="text-center text-red-400">랭킹을 불러오는 데 실패했습니다. (Firestore 인덱스 설정이 필요할 수 있습니다)</p>';
+            }
+        };
+
+        // 🔥 [추가] Power Mode 이펙트 관련 함수들
+        function triggerPowerMode() {
+            const mainContainer = document.querySelector('.max-w-4xl') || document.querySelector('.max-w-2xl');; // 전체 앱 박스 흔들기
+            const isSingle = document.getElementById('single-game-screen').classList.contains('hidden');
+            const cardBox = isSingle ? document.getElementById('multi-card-box') : document.getElementById('quiz-card-box'); // 파티클 기준점
+
+            // 1. 화면 전체 흔들기
+            if (mainContainer) {
+                mainContainer.classList.add('pow-mode-shake');
+                setTimeout(() => { mainContainer.classList.remove('pow-mode-shake'); }, 400);
+            }
+
+            // 2. 타격감 사운드 재생
+            playPowerSound();
+
+            // 3. 파티클 폭발 생성
+            const colors = ['#6366f1', '#a855f7', '#ec4899', '#f59e0b', '#10b981'];
+            for (let i = 0; i < 25; i++) {
+                createParticle(cardBox, colors[i % colors.length]);
+            }
+        }
+
+        function playPowerSound() {
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.type = 'square';
+            oscillator.frequency.setValueAtTime(180, audioCtx.currentTime);
+            oscillator.frequency.exponentialRampToValueAtTime(30, audioCtx.currentTime + 0.12);
+
+            gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + 0.12);
+        }
+
+        function createParticle(targetElement, color) {
+            const particle = document.createElement('div');
+            particle.classList.add('particle');
+            
+            // 🔥 만약 targetElement가 숨겨져 있거나 크기가 0이면 기본 중앙값 대체
+            const rect = targetElement.getBoundingClientRect();
+            
+            // targetElement 안에 직접 파티클을 붙이도록 변경 (position: relative가 부모에 있어야 함)
+            // 부모 기준 중앙에서 시작하도록 설정
+            const startX = rect.width / 2;
+            const startY = rect.height / 2;
+
+            particle.style.backgroundColor = color;
+            const size = Math.random() * 8 + 6;
+            particle.style.width = `${size}px`;
+            particle.style.height = `${size}px`;
+            
+            // 카드 박스 내부의 중앙을 기준 좌표로 설정
+            particle.style.left = `${startX}px`;
+            particle.style.top = `${startY}px`;
+
+            // body가 아니라 targetElement에 직접 부착 (단, targetElement에 position: relative 필수)
+            if (getComputedStyle(targetElement).position === 'static') {
+                targetElement.style.position = 'relative';
+            }
+            targetElement.appendChild(particle);
+
+            const destinationX = (Math.random() - 0.5) * 250;
+            const destinationY = (Math.random() - 0.5) * 250;
+
+            particle.style.setProperty('--x', `${destinationX}px`);
+            particle.style.setProperty('--y', `${destinationY}px`);
+
+            particle.style.animation = `pop ${Math.random() * 0.4 + 0.3}s ease-out forwards`;
+
+            setTimeout(() => {
+                particle.remove();
+            }, 700);
+        }
+
+        // 커스텀 모달 열기 함수 (alert 대체용)
+        window.showModal = function(title, message) {
+            document.getElementById('modal-title').innerText = title;
+            document.getElementById('modal-message').innerText = message;
+            document.getElementById('custom-modal').classList.remove('hidden');
+        }
+
+        window.closeCustomModal = function() {
+            document.getElementById('custom-modal').classList.add('hidden');
+        }
+
+        // ⌨️ 키를 누를 때마다 가벼운 타자기 소리 재생 (Web Audio API 활용)
+        // ⌨️ 타이핑할 때마다 실행되는 미니 Power Mode (마이크로 흔들림 + 미니 파티클 + 총소리 느낌의 사운드)
+        function triggerMiniPowerMode() {
+            // 1. 입력창 또는 카드 박스에 아주 가벼운 흔들림 주기
+            const cardBox = (currentRoomCode === null) ? document.getElementById('quiz-card-box') : document.getElementById('multi-card-box');
+            // console.log("triggerMiniPowerMode, cardBox.id = " + cardBox.id);
+            if (cardBox) {
+                cardBox.classList.add('micro-shake');
+                setTimeout(() => { cardBox.classList.remove('micro-shake'); }, 150);
+            }
+
+            // 2. 가벼운 타격감/총소리 느낌의 짧은 효과음 (선택사항)
+            playTinyGunSound();
+
+            // 3. 톡톡 튀는 미니 파티클 2~3개 생성
+            if (cardBox) {
+                const colors = ['#6366f1', '#a855f7', '#ec4899', '#38bdf8'];
+                for (let i = 0; i < 3; i++) {
+                    createParticle(cardBox, colors[Math.floor(Math.random() * colors.length)]);
+                }
+            }
+        }
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        // 총소리/탁 치는 느낌의 짧고 굵은 사운드
+        function playTinyGunSound() {
+            try {
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+
+                oscillator.type = 'triangle'; // 조금 더 묵직한 느낌
+                oscillator.frequency.setValueAtTime(300, audioCtx.currentTime);
+                oscillator.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.05);
+
+                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.05);
+
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + 0.05);
+            } catch (e) {}
+        }
+        window.forceFinishGame = async function() {
+            if (!confirm("게임을 강제 종료하시겠습니까?")) return;
+            const roomRef = doc(db, "rooms", currentRoomCode);
+            await updateDoc(roomRef, { status: "finished" });
+        }
+        // ❌ 틀렸을 때 나는 낮고 짧은 비프(오답) 소리
+        function playWrongSound() {
+            try {
+                // 기존 audioCtx를 재사용하거나 새로 생성
+                const ctx = window.audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = ctx.createOscillator();
+                const gainNode = ctx.createGain();
+
+                // 톱니바퀴 모양(sawtooth)이나 네모 모양(square)이 둔탁하고 낮은 오답 느낌을 주기 좋습니다
+                oscillator.type = 'sawtooth';
+                
+                // 낮은 주파수(120Hz)에서 더 낮게(60Hz) 떨어지도록 설정
+                oscillator.frequency.setValueAtTime(120, ctx.currentTime);
+                oscillator.frequency.exponentialRampToValueAtTime(60, ctx.currentTime + 0.2);
+
+                // 볼륨 설정 및 서서히 줄어들게 처리
+                gainNode.gain.setValueAtTime(0.2, ctx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+
+                oscillator.connect(gainNode);
+                gainNode.connect(ctx.destination);
+                
+                oscillator.start();
+                oscillator.stop(ctx.currentTime + 0.2);
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    </script>
+    <!-- 커스텀 알림 모달 -->
+    <div id="custom-modal" class="hidden fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50">
+        <div class="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full mx-4 text-center space-y-4">
+            <h3 id="modal-title" class="text-lg font-bold text-slate-800">알림</h3>
+            <p id="modal-message" class="text-sm text-slate-600">메시지 내용</p>
+            <button onclick="closeCustomModal()" class="w-full bg-indigo-600 text-white py-2.5 rounded-xl font-bold hover:bg-indigo-700 transition">확인</button>
+        </div>
+    </div>
+</body>
+</html>
