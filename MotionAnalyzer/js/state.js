@@ -48,7 +48,7 @@ export function createState() {
     physics: null,                // physics.js 결과 객체
 
     view: {
-      energyType: 'BOTH',
+      energyType: 'PE',        // ← 여기를 'KE' | 'PE' | 'BOTH' 중 하나로
       dataType: 'THEORY',
       smoothing: false,
       baselineDrop: 0,            // m, 0 이상만 (기준면을 아래로 내린 양)
