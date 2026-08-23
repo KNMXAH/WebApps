@@ -29,16 +29,43 @@ function movingAverage3(arr) {
   return out;
 }
 
-/** 중앙차분 (양 끝은 전진·후진차분) */
+/**
+ * 세 점 (t0,f0), (t1,f1), (t2,f2) 를 지나는 2차식의 at 지점 미분값.
+ * 프레임 간격이 일정하지 않아도 정확하다(VFR 대응).
+ */
+function lagrangeDeriv3(t0, t1, t2, f0, f1, f2, at) {
+  const d01 = t0 - t1, d02 = t0 - t2, d12 = t1 - t2;
+  if (Math.abs(d01) < 1e-12 || Math.abs(d02) < 1e-12 || Math.abs(d12) < 1e-12) return 0;
+  return f0 * ((at - t1) + (at - t2)) / (d01 * d02)
+    + f1 * ((at - t0) + (at - t2)) / (-d01 * d12)
+    + f2 * ((at - t0) + (at - t1)) / (d02 * d12);
+}
+
+/**
+ * 속도 계산.
+ * 내부 점은 중앙차분, 양 끝은 3점 한쪽차분을 쓴다.
+ *
+ * 단순 전진차분 (x1-x0)/(t1-t0) 은 구간 '중앙'의 속도를 주므로
+ * 0.5·a·dt 만큼 구조적으로 어긋난다. 잡음이 전혀 없는 데이터에서도
+ * 양 끝 프레임의 역학적에너지가 몇 퍼센트씩 낮게 나와,
+ * 공기저항과 무관한 인공적인 꺾임이 그래프 양 끝에 생긴다.
+ * 3점 한쪽차분은 내부 점(중앙차분)과 같은 2차 정확도를 가지며,
+ * 평활화가 아니라 여전히 원자료만 쓰는 차분이다.
+ */
 function centralDiff(vals, t) {
   const n = vals.length;
   const out = new Array(n).fill(0);
   if (n < 2) return out;
-  for (let i = 0; i < n; i++) {
-    if (i === 0) out[i] = (vals[1] - vals[0]) / (t[1] - t[0]);
-    else if (i === n - 1) out[i] = (vals[n - 1] - vals[n - 2]) / (t[n - 1] - t[n - 2]);
-    else out[i] = (vals[i + 1] - vals[i - 1]) / (t[i + 1] - t[i - 1]);
+  if (n === 2) {
+    const v = (vals[1] - vals[0]) / (t[1] - t[0]);
+    return [v, v];
   }
+  for (let i = 1; i < n - 1; i++) {
+    out[i] = (vals[i + 1] - vals[i - 1]) / (t[i + 1] - t[i - 1]);
+  }
+  out[0] = lagrangeDeriv3(t[0], t[1], t[2], vals[0], vals[1], vals[2], t[0]);
+  out[n - 1] = lagrangeDeriv3(t[n - 3], t[n - 2], t[n - 1],
+    vals[n - 3], vals[n - 2], vals[n - 1], t[n - 1]);
   return out;
 }
 
