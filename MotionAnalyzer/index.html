@@ -163,26 +163,6 @@
         <b id="analyzeLabel">—</b>
       </div>
 
-      <fieldset class="opts">
-        <legend>에너지 종류</legend>
-        <label><input type="radio" name="energyType" value="KE"> 운동 에너지</label>
-        <label><input type="radio" name="energyType" value="PE"> 위치 에너지</label>
-        <label><input type="radio" name="energyType" value="BOTH" checked> 운동 + 위치 에너지</label>
-      </fieldset>
-
-      <fieldset class="opts">
-        <legend>데이터 종류</legend>
-        <label><input type="radio" name="dataType" value="THEORY" checked> 이론</label>
-        <label><input type="radio" name="dataType" value="REAL"> 현실</label>
-      </fieldset>
-
-      <fieldset class="opts">
-        <legend>부가 설정</legend>
-        <label><input type="checkbox" id="smoothChk"> 데이터 부드럽게 하기</label>
-        <label class="field inline"><span>질량 (kg)</span><input type="number" id="massInput2" step="0.001" min="0"></label>
-        <label class="field"><span>기준면 내리기</span><input type="range" id="baseRange" min="0" max="100" value="0"></label>
-      </fieldset>
-
       <div id="physWarn" class="warn hidden"></div>
 
       <canvas id="barChart" class="chart" width="720" height="200"></canvas>
@@ -192,6 +172,28 @@
         <span class="key"><i class="sw pe"></i>위치 에너지</span>
         <span class="key"><i class="sw me"></i>역학적 에너지(합)</span>
       </div>
+
+      <div class="opts-row">
+        <fieldset class="opts">
+          <legend>에너지 종류</legend>
+          <label><input type="radio" name="energyType" value="KE"> 운동 에너지</label>
+          <label><input type="radio" name="energyType" value="PE"> 위치 에너지</label>
+          <label><input type="radio" name="energyType" value="BOTH" checked> 운동 + 위치</label>
+        </fieldset>
+
+        <fieldset class="opts">
+          <legend>데이터 종류</legend>
+          <label><input type="radio" name="dataType" value="THEORY" checked> 이론</label>
+          <label><input type="radio" name="dataType" value="REAL"> 현실</label>
+        </fieldset>
+      </div>
+
+      <fieldset class="opts">
+        <legend>부가 설정</legend>
+        <label><input type="checkbox" id="smoothChk"> 데이터 부드럽게 하기</label>
+        <label class="field inline"><span>질량 (kg)</span><input type="number" id="massInput2" step="0.001" min="0"></label>
+        <label class="field"><span>기준면 내리기</span><input type="range" id="baseRange" min="0" max="100" value="0"></label>
+      </fieldset>
 
       <div class="row">
         <button id="backToReview" class="btn" type="button">데이터 수정하기</button>
