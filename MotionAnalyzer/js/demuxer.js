@@ -18,15 +18,23 @@ function loadMp4Box() {
   return mp4boxLoaded;
 }
 
+/** mp4box.all.min.js 는 MP4Box 와 DataStream 을 각각 별개의 전역으로 내보낸다. */
+function getDataStream(MP4Box) {
+  const DS = globalThis.DataStream || MP4Box.DataStream;
+  if (!DS) throw new Error('mp4box.js 의 DataStream 을 찾지 못했습니다.');
+  return DS;
+}
+
 /** avcC / hvcC / vpcC / av1C 박스를 꺼내 VideoDecoder description 으로 만든다. */
 function extractDescription(MP4Box, file, trackId) {
   const trak = file.getTrackById(trackId);
   if (!trak) return null;
+  const DS = getDataStream(MP4Box);
   const entries = trak.mdia?.minf?.stbl?.stsd?.entries || [];
   for (const entry of entries) {
     const box = entry.avcC || entry.hvcC || entry.vpcC || entry.av1C;
     if (!box) continue;
-    const stream = new MP4Box.DataStream(undefined, 0, MP4Box.DataStream.BIG_ENDIAN);
+    const stream = new DS(undefined, 0, DS.BIG_ENDIAN);
     box.write(stream);
     // 앞 8바이트는 박스 헤더(size + type)이므로 잘라낸다.
     return new Uint8Array(stream.buffer, 8);

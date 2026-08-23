@@ -76,22 +76,26 @@ async function runFFmpeg(arrayBuffer, args, inName, outName, { onStatus, onProgr
   ff.on?.('progress', onProg);
   ff.on?.('log', onLog);
   try {
-    await ff.writeFile(inName, new Uint8Array(arrayBuffer));
+    // writeFile 은 넘긴 데이터의 버퍼를 워커로 '이전'한다.
+    // 원본을 그대로 넘기면 분리(detach)되어 다음 트랙에서 다시 쓸 수 없다.
+    const copy = new Uint8Array(arrayBuffer).slice();
+    await ff.writeFile(inName, copy);
     const code = await ff.exec(args);
     if (code !== 0 && code !== undefined) {
       throw new Error('FFmpeg 종료 코드 ' + code);
     }
     const data = await ff.readFile(outName);
     if (!data || !data.byteLength) throw new Error('변환 결과가 비어 있습니다.');
-    const buf = data.buffer ? data.buffer.slice(0) : data;
-    return buf;
+    return data.buffer ? data.buffer.slice(0) : data;
+  } catch (err) {
+    // wasm 이 Aborted 되면 인스턴스가 못 쓰게 되므로 다음 시도에서 새로 만든다.
+    ffmpegPromise = null;
+    throw err;
   } finally {
-    // 정리 실패는 무시한다. 다음 실행에서 어차피 덮어쓴다.
-    for (const name of [inName, outName]) {
-      try { await ff.deleteFile(name); } catch { }
-    }
     ff.off?.('progress', onProg);
     ff.off?.('log', onLog);
+    // 파일 정리는 하지 않는다. 같은 이름으로 덮어쓰이고,
+    // deleteFile 이 wasm 을 Aborted 시키는 경우가 있다.
   }
 }
 
