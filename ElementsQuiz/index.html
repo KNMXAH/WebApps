@@ -122,7 +122,7 @@
                 <!-- [추가] 제한 시간 설정 -->
                 <div id="time-limit-setting-area" class="mb-4">
                     <label class="block text-sm font-bold text-slate-700">제한 시간 (초)</label>
-                    <input type="number" id="room-time-limit" value="30" class="w-full p-2 border rounded-lg font-medium mt-1">
+                    <input type="number" id="room-time-limit" value="90" class="w-full p-2 border rounded-lg font-medium mt-1">
                 </div>
                 <!-- 교사용 모드 선택 설정 -->
                 <div id="host-settings" class="hidden space-y-2 bg-white p-4 rounded-lg border">
@@ -257,7 +257,7 @@
         let multiUnsubscribe = null;
         let multiTimerInterval = null;
         let multiTimeLeft = 30;
-        let timeLimit = 30;
+        let timeLimit = 90;
         let multiCurrentScore = 0;
         let multiQuestionIndex = 0;
         let multiQuestionsList = [];
@@ -532,7 +532,10 @@
                 showModal('권한 없음', '교사 계정만 방을 만들 수 있습니다.');
                 return;
             }
-
+            
+            window.isMultiGameFinished = false;
+            if (multiUnsubscribe) { multiUnsubscribe(); multiUnsubscribe = null; }
+            clearInterval(multiTimerInterval);
             isHost = true;
             currentRoomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
             
@@ -570,6 +573,10 @@
         };
 
         window.joinRoom = async () => {
+            window.isMultiGameFinished = false;
+            if (multiUnsubscribe) { multiUnsubscribe(); multiUnsubscribe = null; }
+            clearInterval(multiTimerInterval);
+
             isHost = false;
             const code = document.getElementById('room-code-input').value.toUpperCase().trim();
             if(!code) return showModal('알림', '방 코드를 입력하세요.');
@@ -654,14 +661,19 @@
 
                 // 게임 시작 신호 포착
                 if (data.status === "playing" && document.getElementById('multi-game-screen').classList.contains('hidden')) {
+                    console.log("✅ playing 감지, startMultiGamePlay 호출됨");
                     multiGameMode = data.mode;
                     // 4. 모든 플레이어에게 동일한 순서의 문제 제공
                     multiQuestionsList = generateDeterministicQuestions(roomCode);
                     startMultiGamePlay();
+                }   else if (data.status === "playing") {
+                    console.log("⚠️ playing 감지됐지만 조건 불충족 (hidden 아님)", 
+                    document.getElementById('multi-game-screen').classList.contains('hidden'));
                 }
 
                 // 게임 종료 포착
                 if (data.status === "finished") {
+                    console.log('finished 감지됨 roomCode= ', roomCode, "window.isMultiGameFinished= ", window.isMultiGameFinished)
                     // 이미 결과 화면이 처리 중이거나 중복 호출되는 것을 방지하기 위해 
                     // 리스너가 살아있는 동안 한 번만 실행되도록 체크
                     if (window.isMultiGameFinished) return;
@@ -682,10 +694,12 @@
 
         window.startMultiGameHost = async () => {
             const selectedMode = document.getElementById('room-mode-select').value;
+            timeLimit = parseInt(document.getElementById('room-time-limit').value) || 90;
             const roomRef = doc(db, "rooms", currentRoomCode);
             await updateDoc(roomRef, {
                 status: "playing",
-                mode: selectedMode
+                mode: selectedMode,
+                timeLimit: timeLimit  // Firestore 문서도 최신값으로 갱신
             });
         };
 
@@ -712,6 +726,7 @@
 
         // 2. 카운트다운 후 게임 시작
         function startMultiGamePlay() {
+            window.isMultiGameFinished = false;
             switchScreen('multi-game-screen');
 
             // 방장일 경우 제어권 설정
@@ -921,6 +936,7 @@
         }
 
         async function finishMultiGame() {
+            console.log("finishMultiGame 호출됨, roomCode:", currentRoomCode);
             clearInterval(multiTimerInterval);
             
             const roomRef = doc(db, "rooms", currentRoomCode);
