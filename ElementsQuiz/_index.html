@@ -81,7 +81,20 @@
         <!-- 3-1. 싱글 모드 선택 화면 -->
         <div id="single-menu-screen" class="hidden space-y-4">
             <button onclick="backToDashboard()" class="text-sm text-slate-500 hover:underline">← 뒤로 가기</button>
-            <h2 class="text-lg font-semibold text-slate-700">싱글 모드 선택</h2>
+
+            <!-- 시간 제한 수정칸 추가 전 원본 -->
+            <!-- <h2 class="text-lg font-semibold text-slate-700">싱글 모드 선택</h2> -->
+
+
+            <!-- 시간 제한 수정칸 추가 버전 -->
+             <div class="flex items-center justify-between">
+                <h2 class="text-lg font-semibold text-slate-700">싱글 모드 선택</h2>
+                <div id="time-limit-setting-area" class="w-32">
+                    <label class="block text-xs font-bold text-slate-700">제한 시간 (초)</label>
+                    <input type="number" id="single-room-time-limit" value="90" class="w-full p-1.5 text-sm border rounded-lg font-medium mt-1">
+                </div>
+            </div>
+
             <div class="grid grid-cols-1 gap-3">
                 <button onclick="startSingleGame('symbol')" class="p-4 bg-emerald-100 text-emerald-800 rounded-xl font-bold hover:bg-emerald-200">원소기호 모드 (기호 보고 이름 맞히기)</button>
                 <button onclick="startSingleGame('element')" class="p-4 bg-emerald-100 text-emerald-800 rounded-xl font-bold hover:bg-emerald-200">원소 모드 (이름 보고 기호 맞히기)</button>
@@ -98,7 +111,7 @@
             <div id="quiz-card-box" class="relative p-8 bg-indigo-50 rounded-2xl border border-indigo-100 space-y-2">
                 <p class="text-sm text-slate-500" id="game-mode-label">모드</p>
                 <h3 id="quiz-question" class="text-4xl font-extrabold text-indigo-900 my-4">H</h3>
-                <input type="text" id="quiz-answer-input" placeholder="정답을 입력하고 엔터!" onkeydown="checkAnswer(event)" oninput="handleTypingEffect(event)" class="w-full max-w-xs p-3 border-2 border-indigo-300 rounded-xl text-center text-xl font-bold focus:outline-none focus:border-indigo-600">
+                <input type="text" id="quiz-answer-input" placeholder="정답을 입력하고 엔터!" onkeydown="singleCheckAnswer(event)" oninput="handleTypingEffect(event)" class="w-full max-w-xs p-3 border-2 border-indigo-300 rounded-xl text-center text-xl font-bold focus:outline-none focus:border-indigo-600">
             </div>
             <button onclick="endSingleGame()" class="text-sm text-red-500 hover:underline">그만하기 (종료)</button>
         </div>
@@ -122,7 +135,7 @@
                 <!-- [추가] 제한 시간 설정 -->
                 <div id="time-limit-setting-area" class="mb-4">
                     <label class="block text-sm font-bold text-slate-700">제한 시간 (초)</label>
-                    <input type="number" id="room-time-limit" value="90" class="w-full p-2 border rounded-lg font-medium mt-1">
+                    <input type="number" id="multi-room-time-limit" value="90" class="w-full p-2 border rounded-lg font-medium mt-1">
                 </div>
                 <!-- 교사용 모드 선택 설정 -->
                 <div id="host-settings" class="hidden space-y-2 bg-white p-4 rounded-lg border">
@@ -246,8 +259,9 @@
 
         // 싱글모드 변수
         let currentGameMode = 'symbol';
-        let currentScore = 0;
-        let timeLeft = 30;
+        let singleCurrentScore = 0;
+        let singlePlayTime = 90
+        let singleTimeLeft = 90;
         let timerInterval = null;
         let currentElement = null;
 
@@ -256,8 +270,8 @@
         let isHost = false;
         let multiUnsubscribe = null;
         let multiTimerInterval = null;
-        let multiTimeLeft = 30;
-        let timeLimit = 90;
+        let multiTimeLeft = 90;
+        let multiPlayTime = 90;
         let multiCurrentScore = 0;
         let multiQuestionIndex = 0;
         let multiQuestionsList = [];
@@ -352,7 +366,7 @@
             }
 
             if (multiUnsubscribe) multiUnsubscribe(); // 실시간 리스너 해제
-            currentScore = 0;
+            singleCurrentScore = 0;
             currentRoomCode = null;
             isHost = false;
 
@@ -422,10 +436,11 @@
         // 싱글 게임 시작
         window.startSingleGame = (mode) => {
             currentGameMode = mode;
-            currentScore = 0;
-            timeLeft = 30;
-            document.getElementById('game-score').innerText = `점수: ${currentScore}점`;
-            document.getElementById('game-timer').innerText = `남은 시간: ${timeLeft}초`;
+            singleCurrentScore = 0;
+            singlePlayTime = parseInt(document.getElementById('single-room-time-limit').value) || 30;
+            singleTimeLeft = singlePlayTime
+            document.getElementById('game-score').innerText = `점수: ${singleCurrentScore}점`;
+            document.getElementById('game-timer').innerText = `남은 시간: ${singleTimeLeft}초`;
             
             let modeNameText = mode === 'symbol' ? '원소기호 모드' : mode === 'element' ? '원소 모드' : '혼합 모드';
             document.getElementById('game-mode-label').innerText = modeNameText;
@@ -435,11 +450,11 @@
 
             clearInterval(timerInterval);
             timerInterval = setInterval(() => {
-                timeLeft--;
-                document.getElementById('game-timer').innerText = `남은 시간: ${timeLeft}초`;
-                if (timeLeft <= 0) {
+                singleTimeLeft--;
+                document.getElementById('game-timer').innerText = `남은 시간: ${singleTimeLeft}초`;
+                if (singleTimeLeft <= 0) {
                     clearInterval(timerInterval);
-                    finishSingleGame();
+                    finishSingleGame(singlePlayTime);
                 }
             }, 1000);
         };
@@ -494,7 +509,7 @@
 
         window.endSingleGame = () => {
             clearInterval(timerInterval);
-            finishSingleGame();
+            finishSingleGame(singlePlayTime-singleTimeLeft);
         };
 
         async function saveBestScore(mode, score) {
@@ -551,14 +566,14 @@
 
             // 4. Firestore에 방 생성 초기 데이터 저장
             const rawName = currentUser.email.replace(DOMAIN, '');
-            timeLimit = parseInt(document.getElementById('room-time-limit').value) || 30;
+            multiPlayTime = parseInt(document.getElementById('multi-room-time-limit').value) || 90;
             await setDoc(doc(db, "rooms", currentRoomCode), {
                 host: rawName,
                 status: "waiting",
                 mode: "symbol",
                 participants: [{ uid: currentUser.uid, name: rawName, score: 0 }],
                 createdAt: new Date(),
-                timeLimit: timeLimit
+                timeLimit: multiPlayTime
             });
 
             // 5. QR 코드 생성
@@ -694,12 +709,12 @@
 
         window.startMultiGameHost = async () => {
             const selectedMode = document.getElementById('room-mode-select').value;
-            timeLimit = parseInt(document.getElementById('room-time-limit').value) || 90;
+            multiPlayTime = parseInt(document.getElementById('multi-room-time-limit').value) || 90;
             const roomRef = doc(db, "rooms", currentRoomCode);
             await updateDoc(roomRef, {
                 status: "playing",
                 mode: selectedMode,
-                timeLimit: timeLimit  // Firestore 문서도 최신값으로 갱신
+                timeLimit: multiPlayTime  // Firestore 문서도 최신값으로 갱신
             });
         };
 
@@ -741,7 +756,7 @@
 
             multiCurrentScore = 0;
             multiQuestionIndex = 0;
-            multiTimeLeft = timeLimit;
+            multiTimeLeft = multiPlayTime;
             document.getElementById('multi-game-score').innerText = `점수: ${multiCurrentScore}점`;
             document.getElementById('multi-game-timer').innerText = `남은 시간: ${multiTimeLeft}초`;
             document.getElementById('multi-mode-label').innerText = multiGameMode === 'symbol' ? '원소기호 모드' : multiGameMode === 'element' ? '원소 모드' : '혼합 모드';
@@ -773,7 +788,7 @@
                 document.getElementById('multi-game-timer').innerText = `남은 시간: ${multiTimeLeft}초`;
                 if (multiTimeLeft <= 0) {
                     clearInterval(multiTimerInterval);
-                    finishMultiGame();
+                    finishMultiGame(multiPlayTime);
                 }
             }, 1000);
         }
@@ -819,7 +834,7 @@
         }
 
                 // 엔터 키로 정답 체크
-        window.checkAnswer = (event) => {
+        window.singleCheckAnswer = (event) => {
             if (event.key === 'Enter') {
                 const userAns = document.getElementById('quiz-answer-input').value.trim();
                 const qType = document.getElementById('quiz-question').dataset.type;
@@ -832,8 +847,8 @@
                 }
 
                 if (isCorrect) {
-                    currentScore += 10;
-                    document.getElementById('game-score').innerText = `점수: ${currentScore}점`;
+                    singleCurrentScore += 10;
+                    document.getElementById('game-score').innerText = `점수: ${singleCurrentScore}점`;
 
                     currentElement.count += 1;
                     // 🔥 [추가] 정답 맞혔을 때 Power Mode 이펙트 발동!
@@ -906,8 +921,9 @@
         
 
         // 게임 종료 및 최고 점수 Firebase 저장
-        async function finishSingleGame() {
-            showModal(`게임 종료! 총 획득 점수: ${currentScore}점`, "");
+        async function finishSingleGame(timePlayed) {
+            let saveScore = Number((singleCurrentScore/timePlayed).toFixed(2));
+            showModal(`게임 종료! 총 획득 점수: ${saveScore}점/초`, "");
             
             if (currentUser) {
                 // 문서 ID를 유저uid_모드 형태로 만들어 모드별로 구분
@@ -915,10 +931,9 @@
                 const scoreRef = doc(db, "scores", scoreDocId);
                 try {
                     const docSnap = await getDoc(scoreRef);
-                    let saveScore = currentScore;
                     if (docSnap.exists()) {
                         const existingScore = docSnap.data().score || 0;
-                        if (existingScore > currentScore) {
+                        if (existingScore > singleCurrentScore) {
                             saveScore = existingScore; 
                         }
                     }
@@ -935,7 +950,7 @@
             switchScreen('dashboard-screen');
         }
 
-        async function finishMultiGame() {
+        async function finishMultiGame(multiTimePlayed) {
             console.log("finishMultiGame 호출됨, roomCode:", currentRoomCode);
             clearInterval(multiTimerInterval);
             
@@ -957,10 +972,10 @@
 
                         try {
                             const docSnap = await getDoc(scoreRef);
-                            let saveScore = p.score;
+                            let saveScore = Number((p.score/multiTimePlayed).toFixed(2));
                             if (docSnap.exists()) {
                                 const existingScore = docSnap.data().score || 0;
-                                if (existingScore > p.score) saveScore = existingScore;
+                                if (existingScore > saveScore) saveScore = existingScore;
                             }
                             const pEmail = p.name + DOMAIN
                             await setDoc(scoreRef, {
@@ -994,7 +1009,7 @@
             const listEl = document.getElementById('final-ranking-list');
             listEl.innerHTML = '<h3 class="font-bold text-slate-700 mb-2">🏆 최종 순위 발표</h3>';
             sorted.forEach((p, idx) => {
-                listEl.innerHTML += `<div class="flex justify-between py-2 border-b"><span class="font-bold">${idx+1}위. ${p.name}</span><span class="text-indigo-600 font-semibold">${p.score}점</span></div>`;
+                listEl.innerHTML += `<div class="flex justify-between py-2 border-b"><span class="font-bold">${idx+1}위. ${p.name}</span><span class="text-indigo-600 font-semibold">${p.score}점/초</span></div>`;
             });
         }
 
@@ -1038,7 +1053,7 @@
                     rankingListEl.innerHTML += `
                         <div class="flex justify-between py-2 px-3">
                             <span class="font-bold">${rank}위. ${rawName}</span>
-                            <span class="text-indigo-600 font-semibold">${data.score}점</span>
+                            <span class="text-indigo-600 font-semibold">${data.score}점/초</span>
                         </div>
                     `;
                     rank++;
