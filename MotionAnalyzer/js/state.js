@@ -27,6 +27,7 @@ export function createState() {
       frameIndex: [],
       estimatedFps: 0,
       displayFps: 0,              // 표시 전용. 계산에 절대 쓰지 않는다.
+      rotation: 0,                // 0 | 90 | 180 | 270 (시계 방향)
       duration: 0,
       srcWidth: 0, srcHeight: 0
     },

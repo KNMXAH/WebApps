@@ -23,6 +23,8 @@ export function initCollect(app) {
     const v = parseFloat(e.target.value);
     s.video.displayFps = isFinite(v) ? v : s.video.estimatedFps;   // 표시 전용
   });
+  $('rotLeft').addEventListener('click', () => app.setRotation(-90));
+  $('rotRight').addEventListener('click', () => app.setRotation(90));
   $('fpsNext').addEventListener('click', () => app.setPhase(PHASE.RULER));
 
   /* --- 4단계: 기준자 --- */

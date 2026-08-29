@@ -152,7 +152,8 @@ class App {
           frameIndex: demuxed.frameIndex,
           samples: demuxed.samples,
           analysisWidth: size.width,
-          analysisHeight: size.height
+          analysisHeight: size.height,
+          rotation: s.video.rotation
         });
         if (track !== 'A') onStatus('변환을 마쳤습니다.');
       } else {
@@ -172,7 +173,8 @@ class App {
           frameIndex: probe.frameIndex,
           analysisWidth: size.width,
           analysisHeight: size.height,
-          estimatedFps: probe.estimatedFps
+          estimatedFps: probe.estimatedFps,
+          rotation: s.video.rotation
         });
         this.notify('이 브라우저에서는 프레임을 정확히 집어내기 어려워 정밀도가 떨어질 수 있습니다.');
       }
@@ -221,11 +223,35 @@ class App {
   showPreviewFrame(n) {
     const s = this.state;
     const v = $('previewVideo');
-    if (!v.src || !s.video.frameIndex[n]) return this.showFrame(n);
+    s.view.currentFrame = n;
+
+    // 회전 중에는 <video> 미리보기를 쓸 수 없다(요소를 돌리면 종횡비가 어긋난다).
+    if (s.video.rotation !== 0 || !v.src || !s.video.frameIndex[n]) {
+      if (this._previewBusy) return;
+      this._previewBusy = true;
+      this.showFrame(n).finally(() => { this._previewBusy = false; });
+      return;
+    }
     v.classList.remove('hidden');
     this.stage.setBadge(false);
-    s.view.currentFrame = n;
     try { v.currentTime = s.video.frameIndex[n].t; } catch { }
+  }
+
+    /** 회전은 FPS 확인 단계에서만 바꿀 수 있다. 이후 단계에서는 좌표계가 이미 고정된다. */
+  async setRotation(delta) {
+    const s = this.state;
+    if (s.phase !== PHASE.FPS_CONFIRM || !this.source) return;
+    s.video.rotation = (((s.video.rotation + delta) % 360) + 360) % 360;
+
+    const size = analysisSize(s.video.srcWidth, s.video.srcHeight, this.sizeAttempt, s.video.rotation);
+    s.video.analysisWidth = size.width;
+    s.video.analysisHeight = size.height;
+
+    this.cache.clear();
+    this.stage.setSize(size.width, size.height);
+    await this.source.resize?.(size.width, size.height, s.video.rotation);
+    await this.showFrame(s.view.currentFrame || 0);
+    this.render();
   }
 
   async showFrame(n) {
@@ -290,7 +316,8 @@ class App {
   /** 분석 좌표계 축소 후 저장된 좌표들을 같은 비율로 옮긴다. */
   async resizeAnalysis(attempt) {
     const s = this.state;
-    const size = analysisSize(s.video.srcWidth, s.video.srcHeight, attempt);
+    // const size = analysisSize(s.video.srcWidth, s.video.srcHeight, attempt);
+        const size = analysisSize(s.video.srcWidth, s.video.srcHeight, attempt, s.video.rotation);
     const k = size.width / s.video.analysisWidth;
     this.sizeAttempt = attempt;
     s.video.analysisWidth = size.width;
@@ -307,7 +334,8 @@ class App {
 
     this.cache.clear();
     this.stage.setSize(size.width, size.height);
-    await this.source.resize?.(size.width, size.height);
+    // await this.source.resize?.(size.width, size.height);
+    await this.source.resize?.(size.width, size.height, s.video.rotation);
   }
 
   /* ---------------- 7단계: 추적 ---------------- */

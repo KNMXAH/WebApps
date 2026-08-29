@@ -12,7 +12,18 @@ export function cacheLimit() {
 }
 
 /** 원본 가로 → 분석 좌표계 크기(§5.2). 재시도 단계마다 폭을 낮춘다. */
-export function analysisSize(srcW, srcH, attempt = 0) {
+// 회전 추가 전 원본
+// export function analysisSize(srcW, srcH, attempt = 0) {
+//   const widths = [1280, 960, 720];
+//   const target = Math.min(srcW, widths[Math.min(attempt, widths.length - 1)]);
+//   const w = Math.max(160, Math.round(target / 2) * 2);
+//   const h = Math.max(120, Math.round((srcH * (w / srcW)) / 2) * 2);
+//   return { width: w, height: h };
+// }
+
+/** 원본 가로 → 분석 좌표계 크기(§5.2). 회전이 90/270 이면 가로세로가 뒤바뀐다. */
+export function analysisSize(srcW, srcH, attempt = 0, rotation = 0) {
+  if (rotation === 90 || rotation === 270) { const t = srcW; srcW = srcH; srcH = t; }
   const widths = [1280, 960, 720];
   const target = Math.min(srcW, widths[Math.min(attempt, widths.length - 1)]);
   const w = Math.max(160, Math.round(target / 2) * 2);

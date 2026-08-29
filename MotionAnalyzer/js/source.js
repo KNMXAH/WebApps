@@ -63,22 +63,32 @@ export class WorkerSource {
     }
   }
 
-  configure({ config, frameIndex, samples, analysisWidth, analysisHeight }) {
+  configure({ config, frameIndex, samples, analysisWidth, analysisHeight, rotation = 0  }) {
     const reqId = this._id();
     const slim = frameIndex.map(f => ({ index: f.index, t: f.t, isKey: f.isKey, decodeIndex: f.decodeIndex }));
     return new Promise((resolve, reject) => {
       this.pending.set(reqId, { resolve, reject });
       this.worker.postMessage({
-        type: 'configure', reqId, config, frameIndex: slim, samples, analysisWidth, analysisHeight
+        type: 'configure', reqId, config, frameIndex: slim, samples, analysisWidth, analysisHeight, rotation
       }, [samples.buffer]);
     });
   }
 
-  resize(analysisWidth, analysisHeight) {
+  // 회전 추가 수정 전 원본
+  // resize(analysisWidth, analysisHeight) {
+  //   const reqId = this._id();
+  //   return new Promise((resolve, reject) => {
+  //     this.pending.set(reqId, { resolve, reject });
+  //     this.worker.postMessage({ type: 'resize', reqId, analysisWidth, analysisHeight });
+  //   });
+  // }
+
+  // 회전 추가
+  resize(analysisWidth, analysisHeight, rotation) {
     const reqId = this._id();
     return new Promise((resolve, reject) => {
       this.pending.set(reqId, { resolve, reject });
-      this.worker.postMessage({ type: 'resize', reqId, analysisWidth, analysisHeight });
+      this.worker.postMessage({ type: 'resize', reqId, analysisWidth, analysisHeight, rotation });
     });
   }
 

@@ -62,6 +62,7 @@ export class FallbackSource {
     this.AW = 0; this.AH = 0;
     this.cvs = null; this.ctx = null;
     this.frameIndex = null;
+    this.rot = 0;
     this.fps = 30;
     this._abort = false;
     this._resume = null;
@@ -70,18 +71,32 @@ export class FallbackSource {
 
   get isPrecise() { return false; }
 
-  async configure({ frameIndex, analysisWidth, analysisHeight, estimatedFps }) {
+  async configure({ frameIndex, analysisWidth, analysisHeight, estimatedFps, rotation = 0 }) {
     this.frameIndex = frameIndex;
     this.AW = analysisWidth; this.AH = analysisHeight;
+    this.rot = rotation;
     this.fps = estimatedFps || 30;
     this.cvs = document.createElement('canvas');
     this.cvs.width = this.AW; this.cvs.height = this.AH;
     this.ctx = this.cvs.getContext('2d', { willReadFrequently: true });
   }
 
-  async resize(analysisWidth, analysisHeight) {
+  async resize(analysisWidth, analysisHeight, rotation) {
     this.AW = analysisWidth; this.AH = analysisHeight;
+    if (rotation != null) this.rot = rotation;
     this.cvs.width = this.AW; this.cvs.height = this.AH;
+  }
+
+  _drawRotated(src) {
+    const ctx = this.ctx, AW = this.AW, AH = this.AH, R = this.rot;
+    ctx.save();
+    ctx.clearRect(0, 0, AW, AH);
+    if (R === 90) { ctx.translate(AW, 0); ctx.rotate(Math.PI / 2); }
+    else if (R === 180) { ctx.translate(AW, AH); ctx.rotate(Math.PI); }
+    else if (R === 270) { ctx.translate(0, AH); ctx.rotate(-Math.PI / 2); }
+    const swap = (R === 90 || R === 270);
+    ctx.drawImage(src, 0, 0, swap ? AH : AW, swap ? AW : AH);
+    ctx.restore();
   }
 
   /** 프레임 표시 구간의 한가운데로 탐색해 경계값 오차를 피한다. */
@@ -108,7 +123,11 @@ export class FallbackSource {
       setTimeout(done, 1200);
     });
 
-    this.ctx.drawImage(v, 0, 0, this.AW, this.AH);
+    // 회전 추가 전
+    // this.ctx.drawImage(v, 0, 0, this.AW, this.AH);
+
+    // 회전 추가 후
+    this._drawRotated(v);
   }
 
   // 탐색 요청은 하나씩 순서대로 처리한다

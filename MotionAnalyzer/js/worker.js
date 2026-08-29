@@ -6,6 +6,7 @@ import { Tracker, toGray, TRACK_CONST } from './tracker.js';
 
 let dec = null;
 let AW = 0, AH = 0;
+let ROT = 0;
 let cvs = null, ctx = null;
 let frameIndex = null;
 
@@ -24,6 +25,7 @@ self.onmessage = async (e) => {
       case 'track': return await onTrack(m);
       case 'resize':
         AW = m.analysisWidth; AH = m.analysisHeight;
+        if (m.rotation != null) ROT = m.rotation;
         cvs = new OffscreenCanvas(AW, AH);
         ctx = cvs.getContext('2d', { willReadFrequently: true });
         post({ type: 'resized', reqId: m.reqId });
@@ -48,6 +50,7 @@ self.onmessage = async (e) => {
 
 async function onConfigure(m) {
   AW = m.analysisWidth; AH = m.analysisHeight;
+  ROT = m.rotation || 0;
   cvs = new OffscreenCanvas(AW, AH);
   ctx = cvs.getContext('2d', { willReadFrequently: true });
   frameIndex = m.frameIndex;
@@ -55,8 +58,20 @@ async function onConfigure(m) {
   post({ type: 'configured', reqId: m.reqId });
 }
 
+// 회전 추가 수정 전 원본
+// function drawFrame(frame) {
+//   ctx.drawImage(frame, 0, 0, AW, AH);
+// }
+
 function drawFrame(frame) {
-  ctx.drawImage(frame, 0, 0, AW, AH);
+  ctx.save();
+  ctx.clearRect(0, 0, AW, AH);
+  if (ROT === 90) { ctx.translate(AW, 0); ctx.rotate(Math.PI / 2); }
+  else if (ROT === 180) { ctx.translate(AW, AH); ctx.rotate(Math.PI); }
+  else if (ROT === 270) { ctx.translate(0, AH); ctx.rotate(-Math.PI / 2); }
+  const swap = (ROT === 90 || ROT === 270);
+  ctx.drawImage(frame, 0, 0, swap ? AH : AW, swap ? AW : AH);
+  ctx.restore();
 }
 
 async function onGetFrame(m) {
