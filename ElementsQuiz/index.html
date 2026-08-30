@@ -91,7 +91,7 @@
                 <h2 class="text-lg font-semibold text-slate-700">싱글 모드 선택</h2>
                 <div id="time-limit-setting-area" class="w-32">
                     <label class="block text-xs font-bold text-slate-700">제한 시간 (초)</label>
-                    <input type="number" id="single-room-time-limit" value="90" class="w-full p-1.5 text-sm border rounded-lg font-medium mt-1">
+                    <input type="number" min="10" id="single-room-time-limit" value="90" class="w-full p-1.5 text-sm border rounded-lg font-medium mt-1">
                 </div>
             </div>
 
@@ -135,7 +135,7 @@
                 <!-- [추가] 제한 시간 설정 -->
                 <div id="time-limit-setting-area" class="mb-4">
                     <label class="block text-sm font-bold text-slate-700">제한 시간 (초)</label>
-                    <input type="number" id="multi-room-time-limit" value="90" class="w-full p-2 border rounded-lg font-medium mt-1">
+                    <input type="number" min="10" id="multi-room-time-limit" value="90" class="w-full p-2 border rounded-lg font-medium mt-1">
                 </div>
                 <!-- 교사용 모드 선택 설정 -->
                 <div id="host-settings" class="hidden space-y-2 bg-white p-4 rounded-lg border">
@@ -438,6 +438,7 @@
             currentGameMode = mode;
             singleCurrentScore = 0;
             singlePlayTime = parseInt(document.getElementById('single-room-time-limit').value) || 30;
+            if (singlePlayTime < 30) singlePlayTime = 30;
             singleTimeLeft = singlePlayTime
             document.getElementById('game-score').innerText = `점수: ${singleCurrentScore}점`;
             document.getElementById('game-timer').innerText = `남은 시간: ${singleTimeLeft}초`;
@@ -710,6 +711,8 @@
         window.startMultiGameHost = async () => {
             const selectedMode = document.getElementById('room-mode-select').value;
             multiPlayTime = parseInt(document.getElementById('multi-room-time-limit').value) || 90;
+            if (multiPlayTime < 30) multiPlayTime = 30;
+
             const roomRef = doc(db, "rooms", currentRoomCode);
             await updateDoc(roomRef, {
                 status: "playing",
