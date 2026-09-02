@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>중학생을 위한 원자 조립 시뮬레이터</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Three.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+    <div id="info-overlay">
+        <h1 id="element-display">원자를 만들어보세요</h1>
+        <p id="sub-display">사이드바에서 입자를 끌어다 놓으세요.</p>
+    </div>
+
+    <div id="sidebar">
+        <div class="particle-btn" id="btn-proton" draggable="true" data-type="proton">
+            <div class="circle proton"><span>+</span></div>
+            <span>양성자</span>
+        </div>
+        <div class="particle-btn" id="btn-neutron" draggable="true" data-type="neutron">
+            <div class="circle neutron"></div>
+            <span>중성자</span>
+        </div>
+        <div class="particle-btn" id="btn-electron" draggable="true" data-type="electron">
+            <div class="circle electron"><span>-</span></div>
+            <span>전자</span>
+        </div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

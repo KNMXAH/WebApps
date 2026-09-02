@@ -385,6 +385,10 @@
             const userInput = document.getElementById('username').value.trim();
             const password = document.getElementById('password').value;
             if(!userInput || !password) return showModal('입력 오류', '아이디와 비밀번호를 모두 입력해주세요.');
+            const isHakBun = /^\d{5}$/.test(userInput);
+            if(!isHakBun) return showModal('입력 오류', '아이디는 학번으로 입력해주세요.');
+            const hakBun = Number(userInput);
+            if(hakBun <= 20000 || 20629 <= hakBun) return showModal('입력 오류', '아이디는 유요한 학번으로 입력해주세요.');
             
             const email = userInput + DOMAIN;
 
@@ -510,7 +514,9 @@
 
         window.endSingleGame = () => {
             clearInterval(timerInterval);
-            finishSingleGame(singlePlayTime-singleTimeLeft);
+            let timePlayed = singlePlayTime-singleTimeLeft
+            if (timePlayed < 30) timePlayed = 30;
+            finishSingleGame(timePlayed);
         };
 
         async function saveBestScore(mode, score) {
