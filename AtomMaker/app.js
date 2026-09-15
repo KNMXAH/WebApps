@@ -29,6 +29,8 @@ const ELEMENT_TABLE = {
 // N = Z - 1 or N = Z + 1 -> TEMPORARY (5 sec timer)
 // Otherwise -> UNSTABLE (Bounce off)
 function getNuclearStabilityStatus(Z, N) {
+    if (Z === 1 && N === 0) return 'PERMANENT';  
+    if (Z === 1 && N === 1) return 'TEMPORARY';  
     if (Z <= 0) return 'UNSTABLE';
     if (N === Z) return 'PERMANENT';             // N = Z (영구 안정)
     if (N === Z - 1 || N === Z + 1) return 'TEMPORARY'; // N = Z-1 또는 N = Z+1 (5초 시한부 안정)
@@ -281,7 +283,13 @@ function processProtonDrop(dropX, dropY) {
         }
         
         // For Z=1, N=0 -> N = Z - 1 (Temporary 5-second stability)
-        start5SecDecayTimer('proton');
+        const status = getNuclearStabilityStatus(1, atomState.neutronCount);
+        if (status === 'TEMPORARY') {
+            start5SecDecayTimer('proton');
+        } else if (status === 'PERMANENT') {
+            clearDecayTimer();
+            stabilityIndicator.style.opacity = '0';
+        }
         return;
     }
 
