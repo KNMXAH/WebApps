@@ -8,3 +8,4 @@ MotionAnalyzer_old/
 !README.md
 *.txt
 ElementsQuiz/firestore-migration
+ElementsQuiz/config.js
