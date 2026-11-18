@@ -1,0 +1,134 @@
+// ==============================================================================
+// 애플리케이션 상태 및 제어 메인 로직
+// ==============================================================================
+let isRecording = false;
+let recordedData = [];
+let currentPicoId = '';
+
+document.addEventListener('DOMContentLoaded', () => {
+    // 1. 게이지 초기화
+    initGauges();
+
+    // 2. 이벤트 버튼 바인딩
+    document.getElementById('btnConnect').addEventListener('click', handleConnectClick);
+    document.getElementById('btnRec').addEventListener('click', toggleRecording);
+    document.getElementById('tabDash').addEventListener('click', () => switchTab('dashboard'));
+    document.getElementById('tabAnalysis').addEventListener('click', () => switchTab('analysis'));
+    document.getElementById('btnDownload').addEventListener('click', downloadCSV);
+
+    // 3. 센서 체크박스 2개 제한 이벤트 지정
+    document.querySelectorAll('.sensor-chk').forEach(chk => {
+        chk.addEventListener('change', (e) => {
+            const selected = getSelectedSensorKeys();
+            if (selected.length > 2) {
+                alert('센서는 최대 2개까지만 선택 가능합니다.');
+                e.target.checked = false;
+                return;
+            }
+            renderAnalysisView(recordedData);
+        });
+    });
+});
+
+// ------------------------------------------------------------------------------
+// 연결 및 통신 처리
+// ------------------------------------------------------------------------------
+function handleConnectClick() {
+    const inputVal = document.getElementById('picoIdInput').value.trim().toLowerCase();
+    currentPicoId = inputVal;
+
+    setupMQTTConnection(
+        currentPicoId,
+        (status, details) => {
+            const badge = document.getElementById('statusBadge');
+            if (status === 'connected') {
+                badge.className = 'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span> 연결됨: ${details}`;
+            } else if (status === 'closed' || status === 'error') {
+                badge.className = 'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20';
+                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span> 연결 해제됨`;
+            }
+        },
+        (packet) => {
+            // 게이지 화면 업데이트
+            updateGaugeDisplays(packet.sensors);
+
+            // 데이터 수집 중일 경우 백그라운드 배열 저장
+            if (isRecording) {
+                const row = { timestamp: packet.timestamp || new Date().toLocaleTimeString(), ...(packet.sensors || {}) };
+                recordedData.push(row);
+                document.getElementById('recCount').innerText = `기록된 데이터: ${recordedData.length}개`;
+                
+                // 현재 분석 화면이 열려있다면 그래프와 표 동시 갱신
+                if (!document.getElementById('analysisView').classList.contains('hidden')) {
+                    renderAnalysisView(recordedData);
+                }
+            }
+        }
+    );
+}
+
+// ------------------------------------------------------------------------------
+// UI 제어 (수집 시작/정지, 탭 전환)
+// ------------------------------------------------------------------------------
+function toggleRecording() {
+    isRecording = !isRecording;
+    const btn = document.getElementById('btnRec');
+    if (isRecording) {
+        btn.className = 'bg-rose-600 hover:bg-rose-500 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 transition';
+        btn.innerHTML = '⏸ 수집 일시정지';
+    } else {
+        btn.className = 'bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 transition';
+        btn.innerHTML = '▶ 데이터 수집 시작';
+    }
+}
+
+function switchTab(tab) {
+    const dashView = document.getElementById('dashboardView');
+    const analysisView = document.getElementById('analysisView');
+    const tabDashBtn = document.getElementById('tabDash');
+    const tabAnalysisBtn = document.getElementById('tabAnalysis');
+
+    if (tab === 'dashboard') {
+        dashView.classList.remove('hidden');
+        dashView.classList.add('grid');
+        analysisView.classList.add('hidden');
+        tabDashBtn.className = 'px-4 py-2 rounded-lg text-sm font-semibold bg-cyan-600 text-white';
+        tabAnalysisBtn.className = 'px-4 py-2 rounded-lg text-sm font-semibold bg-slate-700 hover:bg-slate-600 text-slate-200';
+    } else {
+        dashView.classList.add('hidden');
+        dashView.classList.remove('grid');
+        analysisView.classList.remove('hidden');
+        analysisView.classList.add('grid');
+        tabDashBtn.className = 'px-4 py-2 rounded-lg text-sm font-semibold bg-slate-700 hover:bg-slate-600 text-slate-200';
+        tabAnalysisBtn.className = 'px-4 py-2 rounded-lg text-sm font-semibold bg-cyan-600 text-white';
+        renderAnalysisView(recordedData);
+    }
+}
+
+// ------------------------------------------------------------------------------
+// CSV 데이터 익스포트
+// ------------------------------------------------------------------------------
+function downloadCSV() {
+    if (recordedData.length === 0) {
+        alert('다운로드할 수집 데이터가 없습니다.');
+        return;
+    }
+
+    const keys = ['timestamp', 'co2', 'temperature', 'humidity', 'pressure', 'distance', 'weight', 'water_temp'];
+    let csvContent = 'data:text/csv;charset=utf-8,\uFEFF';
+    csvContent += keys.join(',') + '\n';
+
+    recordedData.forEach(row => {
+        const line = keys.map(k => row[k] ?? '').join(',');
+        csvContent += line + '\n';
+    });
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `pico_science_data_${currentPicoId || 'export'}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
