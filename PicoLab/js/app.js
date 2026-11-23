@@ -21,8 +21,8 @@ document.addEventListener('DOMContentLoaded', () => {
         chk.addEventListener('change', (e) => {
             const selected = getSelectedSensorKeys();
             if (selected.length > 2) {
-                alert('센서는 최대 2개까지만 선택 가능합니다.');
                 e.target.checked = false;
+                alert('센서는 최대 2개까지만 선택 가능합니다.');
                 return;
             }
             renderAnalysisView(recordedData);
@@ -36,6 +36,18 @@ document.addEventListener('DOMContentLoaded', () => {
 function handleConnectClick() {
     const inputVal = document.getElementById('picoIdInput').value.trim().toLowerCase();
     currentPicoId = inputVal;
+    
+    if (!inputVal || inputVal.length !== 6) {
+        alert('6자리 피코 ID를 정확히 입력하세요.');
+        return;
+    }
+
+    // 새 기기 연결 시 이전 수집 기록 초기화
+    recordedData = [];
+    document.getElementById('recCount').innerText = '기록된 데이터: 0개';
+    if (!document.getElementById('analysisView').classList.contains('hidden')) {
+        renderAnalysisView(recordedData);
+    }
 
     setupMQTTConnection(
         currentPicoId,
@@ -109,6 +121,15 @@ function switchTab(tab) {
 // ------------------------------------------------------------------------------
 // CSV 데이터 익스포트
 // ------------------------------------------------------------------------------
+function escapeCSVField(val) {
+    if (val === undefined || val === null) return '';
+    const str = String(val);
+    if (/[",\n\r]/.test(str)) {
+        return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+}
+
 function downloadCSV() {
     if (recordedData.length === 0) {
         alert('다운로드할 수집 데이터가 없습니다.');
@@ -116,19 +137,20 @@ function downloadCSV() {
     }
 
     const keys = ['timestamp', 'co2', 'temperature', 'humidity', 'pressure', 'distance', 'weight', 'water_temp'];
-    let csvContent = 'data:text/csv;charset=utf-8,\uFEFF';
-    csvContent += keys.join(',') + '\n';
+    const lines = [keys.map(escapeCSVField).join(',')];
 
     recordedData.forEach(row => {
-        const line = keys.map(k => row[k] ?? '').join(',');
-        csvContent += line + '\n';
+        const line = keys.map(k => escapeCSVField(row[k])).join(',');
+        lines.push(line);
     });
 
-    const encodedUri = encodeURI(csvContent);
+    const blob = new Blob(['\uFEFF' + lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `pico_science_data_${currentPicoId || 'export'}.csv`);
+    link.href = url;
+    link.download = `pico_science_data_${currentPicoId || 'export'}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

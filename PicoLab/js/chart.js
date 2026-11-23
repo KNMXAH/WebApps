@@ -69,13 +69,16 @@ function renderAnalysisView(recordedData) {
     else if (selected.length === 2) {
         const k1 = selected[0], k2 = selected[1];
         const c1 = SENSOR_CONFIG[k1], c2 = SENSOR_CONFIG[k2];
+        const validPairs = recordedData
+            .filter(d => d[k1] !== null && d[k1] !== undefined && d[k2] !== null && d[k2] !== undefined)
+            .map(d => ({ x: Number(d[k1]), y: Number(d[k2]) }));
 
         analysisChartInstance = new Chart(ctx, {
             type: 'scatter',
             data: {
                 datasets: [{
                     label: `${c1.name} vs ${c2.name}`,
-                    data: recordedData.map(d => ({ x: d[k1], y: d[k2] })),
+                    data: validPairs,
                     backgroundColor: c1.color,
                     borderColor: c2.color,
                     pointRadius: 5

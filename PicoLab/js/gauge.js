@@ -7,7 +7,7 @@ const SENSOR_CONFIG = {
     humidity: { name: '습도', unit: '%', min: 0, max: 100, color: '#06b6d4', elemId: 'valHumidity', canvasId: 'gaugeHumidity' },
     pressure: { name: '기압', unit: 'hPa', min: 900, max: 1100, color: '#6366f1', elemId: 'valPressure', canvasId: 'gaugePressure' },
     distance: { name: '거리', unit: 'mm', min: 0, max: 1500, color: '#a855f7', elemId: 'valDistance', canvasId: 'gaugeDistance' },
-    weight: { name: '무게', unit: 'g', min: 0, max: 1000, color: '#f43f5e', elemId: 'valWeight', canvasId: 'gaugeWeight' },
+    weight: { name: '무게', unit: 'g', min: -500, max: 1000, color: '#f43f5e', elemId: 'valWeight', canvasId: 'gaugeWeight' },
     water_temp: { name: '수온', unit: '°C', min: -10, max: 50, color: '#14b8a6', elemId: 'valWaterTemp', canvasId: 'gaugeWaterTemp' }
 };
 
@@ -58,10 +58,16 @@ function updateGaugeDisplays(sensorsData) {
     Object.keys(SENSOR_CONFIG).forEach(key => {
         const cfg = SENSOR_CONFIG[key];
         const val = sensorsData[key];
-        if (val !== undefined && val !== null) {
-            const valElem = document.getElementById(cfg.elemId);
-            if (valElem) valElem.innerText = val;
-            drawGaugeArc(cfg.canvasId, val, cfg.min, cfg.max, cfg.color);
+        const valElem = document.getElementById(cfg.elemId);
+
+        if (val === undefined || val === null || Number.isNaN(Number(val))) {
+            if (valElem) valElem.innerText = '---';
+            drawGaugeArc(cfg.canvasId, cfg.min, cfg.min, cfg.max, cfg.color);
+            return;
         }
+
+        const numVal = Number(val);
+        if (valElem) valElem.innerText = numVal;
+        drawGaugeArc(cfg.canvasId, numVal, cfg.min, cfg.max, cfg.color);
     });
 }
