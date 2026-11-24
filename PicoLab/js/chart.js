@@ -2,6 +2,7 @@
 // 데이터 분석 그래프 (Chart.js) & HTML 표 생성 모듈
 // ==============================================================================
 let analysisChartInstance = null;
+let currentChartSignature = null;
 
 function getSelectedSensorKeys() {
     const checked = document.querySelectorAll('.sensor-chk:checked');
@@ -19,12 +20,15 @@ function renderAnalysisView(recordedData) {
     const labels = recordedData.map(d => d.timestamp);
 
     // 기존 차트 메모리 해제
-    if (analysisChartInstance) {
-        analysisChartInstance.destroy();
-        analysisChartInstance = null;
-    }
+    const chartType = selected.length === 1 ? 'line' : (selected.length === 2 ? 'scatter' : null);
+    const nextSignature = chartType ? `${chartType}:${selected.join(',')}` : null;
 
-    if (selected.length === 0) {
+    if (selected.length === 0 || !chartType) {
+        if (analysisChartInstance) {
+            analysisChartInstance.destroy();
+            analysisChartInstance = null;
+        }
+        currentChartSignature = null;
         document.getElementById('tableHeader').innerHTML = `<th class="p-2.5">시각</th><th class="p-2.5">데이터</th>`;
         document.getElementById('tableBody').innerHTML = '';
         return;
@@ -34,37 +38,46 @@ function renderAnalysisView(recordedData) {
     if (selected.length === 1) {
         const sKey = selected[0];
         const cfg = SENSOR_CONFIG[sKey];
+        const seriesData = recordedData.map(d => d[sKey]);
 
-        analysisChartInstance = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: labels,
-                datasets: [{
-                    label: `${cfg.name} (${cfg.unit})`,
-                    data: recordedData.map(d => d[sKey]),
-                    borderColor: cfg.color,
-                    backgroundColor: cfg.color + '22',
-                    fill: true,
-                    tension: 0.3
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { labels: { color: '#94a3b8' } } },
-                scales: {
-                    x: { ticks: { color: '#64748b' }, grid: { color: '#334155' } },
-                    y: { ticks: { color: '#64748b' }, grid: { color: '#334155' } }
+        if (analysisChartInstance && currentChartSignature === nextSignature) {
+            analysisChartInstance.data.labels = labels;
+            analysisChartInstance.data.datasets[0].data = seriesData;
+            analysisChartInstance.update('none');
+        } else {
+            if (analysisChartInstance) analysisChartInstance.destroy();
+            currentChartSignature = nextSignature;
+            analysisChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: `${cfg.name} (${cfg.unit})`,
+                        data: seriesData,
+                        borderColor: cfg.color,
+                        backgroundColor: cfg.color + '22',
+                        fill: true,
+                        tension: 0.3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    plugins: { legend: { labels: { color: '#94a3b8' } } },
+                    scales: {
+                        x: { ticks: { color: '#64748b' }, grid: { color: '#334155' } },
+                        y: { ticks: { color: '#64748b' }, grid: { color: '#334155' } }
+                    }
                 }
-            }
-        });
+            });
+        }
 
         document.getElementById('tableHeader').innerHTML = `<th class="p-2.5">시각</th><th class="p-2.5">${cfg.name} (${cfg.unit})</th>`;
         document.getElementById('tableBody').innerHTML = recordedData.map(d => 
             `<tr class="hover:bg-slate-700/40"><td class="p-2.5">${d.timestamp}</td><td class="p-2.5 font-bold text-cyan-400">${d[sKey] ?? '---'}</td></tr>`
         ).join('');
-
-    } 
+    }
     // [경우 2] 센서 2개 선택 -> 데이터1-데이터2 관계 분석 (Scatter 산점도)
     else if (selected.length === 2) {
         const k1 = selected[0], k2 = selected[1];
@@ -73,27 +86,35 @@ function renderAnalysisView(recordedData) {
             .filter(d => d[k1] !== null && d[k1] !== undefined && d[k2] !== null && d[k2] !== undefined)
             .map(d => ({ x: Number(d[k1]), y: Number(d[k2]) }));
 
-        analysisChartInstance = new Chart(ctx, {
-            type: 'scatter',
-            data: {
-                datasets: [{
-                    label: `${c1.name} vs ${c2.name}`,
-                    data: validPairs,
-                    backgroundColor: c1.color,
-                    borderColor: c2.color,
-                    pointRadius: 5
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { labels: { color: '#94a3b8' } } },
-                scales: {
-                    x: { title: { display: true, text: `${c1.name} (${c1.unit})`, color: '#94a3b8' }, ticks: { color: '#64748b' }, grid: { color: '#334155' } },
-                    y: { title: { display: true, text: `${c2.name} (${c2.unit})`, color: '#94a3b8' }, ticks: { color: '#64748b' }, grid: { color: '#334155' } }
+        if (analysisChartInstance && currentChartSignature === nextSignature) {
+            analysisChartInstance.data.datasets[0].data = validPairs;
+            analysisChartInstance.update('none');
+        } else {
+            if (analysisChartInstance) analysisChartInstance.destroy();
+            currentChartSignature = nextSignature;
+            analysisChartInstance = new Chart(ctx, {
+                type: 'scatter',
+                data: {
+                    datasets: [{
+                        label: `${c1.name} vs ${c2.name}`,
+                        data: validPairs,
+                        backgroundColor: c1.color,
+                        borderColor: c2.color,
+                        pointRadius: 5
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    plugins: { legend: { labels: { color: '#94a3b8' } } },
+                    scales: {
+                        x: { title: { display: true, text: `${c1.name} (${c1.unit})`, color: '#94a3b8' }, ticks: { color: '#64748b' }, grid: { color: '#334155' } },
+                        y: { title: { display: true, text: `${c2.name} (${c2.unit})`, color: '#94a3b8' }, ticks: { color: '#64748b' }, grid: { color: '#334155' } }
+                    }
                 }
-            }
-        });
+            });
+        }
 
         document.getElementById('tableHeader').innerHTML = `<th class="p-2.5">시각</th><th class="p-2.5">${c1.name}</th><th class="p-2.5">${c2.name}</th>`;
         document.getElementById('tableBody').innerHTML = recordedData.map(d => 
