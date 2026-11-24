@@ -36,7 +36,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function handleConnectClick() {
     const inputVal = document.getElementById('picoIdInput').value.trim().toLowerCase();
     currentPicoId = inputVal;
-    
+
     if (!inputVal || inputVal.length !== 6) {
         alert('6자리 피코 ID를 정확히 입력하세요.');
         return;
@@ -136,7 +136,7 @@ function downloadCSV() {
         return;
     }
 
-    const keys = ['timestamp', 'co2', 'temperature', 'humidity', 'pressure', 'distance', 'weight', 'water_temp'];
+    const keys = ['timestamp', 'co2', 'BMP temperature', 'SCD temperature', 'humidity', 'pressure', 'distance', 'weight', 'water_temp'];
     const lines = [keys.map(escapeCSVField).join(',')];
 
     recordedData.forEach(row => {

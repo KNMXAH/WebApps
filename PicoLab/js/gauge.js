@@ -2,8 +2,9 @@
 // 1. 센서 사양 및 색상 정의
 // ==============================================================================
 const SENSOR_CONFIG = {
-    co2: { name: 'CO₂', unit: 'ppm', min: 0, max: 2000, color: '#10b981', elemId: 'valCO2', canvasId: 'gaugeCO2' },
-    temperature: { name: '대기온도', unit: '°C', min: -10, max: 50, color: '#f59e0b', elemId: 'valTemp', canvasId: 'gaugeTemp' },
+    co2: { name: 'CO₂ 농도', unit: 'ppm', min: 0, max: 2000, color: '#10b981', elemId: 'valCO2', canvasId: 'gaugeCO2' },
+    'BMP temperature': { name: '온도(대기압/온도 센서)', unit: '°C', min: -10, max: 50, color: '#f59e0b', elemId: 'valBmpTemp', canvasId: 'gaugeBmpTemp' },
+    'SCD temperature': { name: '온도(CO₂ 센서)', unit: '°C', min: -10, max: 50, color: '#fb923c', elemId: 'valScdTemp', canvasId: 'gaugeScdTemp' },
     humidity: { name: '습도', unit: '%', min: 0, max: 100, color: '#06b6d4', elemId: 'valHumidity', canvasId: 'gaugeHumidity' },
     pressure: { name: '기압', unit: 'hPa', min: 900, max: 1100, color: '#6366f1', elemId: 'valPressure', canvasId: 'gaugePressure' },
     distance: { name: '거리', unit: 'mm', min: 0, max: 1500, color: '#a855f7', elemId: 'valDistance', canvasId: 'gaugeDistance' },

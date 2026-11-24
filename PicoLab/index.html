@@ -100,12 +100,23 @@
             </div>
 
             <div class="bg-slate-800 rounded-2xl p-5 border border-slate-700 shadow-lg flex flex-col items-center">
-                <h3 class="text-slate-300 font-semibold text-sm mb-2">🌡️ 대기 온도</h3>
+                <h3 class="text-slate-300 font-semibold text-sm mb-2">🌡️ 온도 (대기압 센서)</h3>
                 <div class="relative w-40 h-28 flex items-center justify-center">
-                    <canvas id="gaugeTemp" width="160" height="110"></canvas>
+                    <canvas id="gaugeBmpTemp" width="160" height="110"></canvas>
                 </div>
                 <div class="mt-2 text-center">
-                    <span id="valTemp" class="text-3xl font-bold font-mono text-amber-400">---</span>
+                    <span id="valBmpTemp" class="text-3xl font-bold font-mono text-amber-400">---</span>
+                    <span class="text-xs text-slate-400 ml-1">°C</span>
+                </div>
+            </div>
+
+            <div class="bg-slate-800 rounded-2xl p-5 border border-slate-700 shadow-lg flex flex-col items-center">
+                <h3 class="text-slate-300 font-semibold text-sm mb-2">🌡️ 온도 (CO₂ 센서)</h3>
+                <div class="relative w-40 h-28 flex items-center justify-center">
+                    <canvas id="gaugeScdTemp" width="160" height="110"></canvas>
+                </div>
+                <div class="mt-2 text-center">
+                    <span id="valScdTemp" class="text-3xl font-bold font-mono text-orange-400">---</span>
                     <span class="text-xs text-slate-400 ml-1">°C</span>
                 </div>
             </div>
@@ -179,7 +190,10 @@
                         <input type="checkbox" class="sensor-chk rounded text-cyan-500" value="co2" checked> CO₂ (ppm)
                     </label>
                     <label class="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" class="sensor-chk rounded text-cyan-500" value="temperature"> 대기온도 (°C)
+                        <input type="checkbox" class="sensor-chk rounded text-cyan-500" value="BMP temperature"> 온도 (대기압 센서) (°C)
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" class="sensor-chk rounded text-cyan-500" value="SCD temperature"> 온도 (CO₂ 센서) (°C)
                     </label>
                     <label class="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" class="sensor-chk rounded text-cyan-500" value="humidity"> 습도 (%)
