@@ -5,6 +5,26 @@ let isRecording = false;
 let recordedData = [];
 let currentPicoId = '';
 
+let _analysisRenderTimer = null;
+const ANALYSIS_RENDER_INTERVAL_MS = 400;
+
+function scheduleAnalysisRender() {
+    if (_analysisRenderTimer !== null) return;
+    _analysisRenderTimer = setTimeout(() => {
+        _analysisRenderTimer = null;
+        if (!document.getElementById('analysisView').classList.contains('hidden')) {
+            renderAnalysisView(recordedData);
+        }
+    }, ANALYSIS_RENDER_INTERVAL_MS);
+}
+
+function clearPendingAnalysisRender() {
+    if (_analysisRenderTimer !== null) {
+        clearTimeout(_analysisRenderTimer);
+        _analysisRenderTimer = null;
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     // 1. 게이지 초기화
     initGauges();
@@ -43,6 +63,7 @@ function handleConnectClick() {
     }
 
     // 새 기기 연결 시 이전 수집 기록 초기화
+    clearPendingAnalysisRender();
     recordedData = [];
     document.getElementById('recCount').innerText = '기록된 데이터: 0개';
     if (!document.getElementById('analysisView').classList.contains('hidden')) {
@@ -71,9 +92,9 @@ function handleConnectClick() {
                 recordedData.push(row);
                 document.getElementById('recCount').innerText = `기록된 데이터: ${recordedData.length}개`;
                 
-                // 현재 분석 화면이 열려있다면 그래프와 표 동시 갱신
+                // 현재 분석 화면이 열려있다면 일정 간격(400ms)으로 그래프와 표 갱신 예약
                 if (!document.getElementById('analysisView').classList.contains('hidden')) {
-                    renderAnalysisView(recordedData);
+                    scheduleAnalysisRender();
                 }
             }
         }
@@ -114,6 +135,7 @@ function switchTab(tab) {
         analysisView.classList.add('grid');
         tabDashBtn.className = 'px-4 py-2 rounded-lg text-sm font-semibold bg-slate-700 hover:bg-slate-600 text-slate-200';
         tabAnalysisBtn.className = 'px-4 py-2 rounded-lg text-sm font-semibold bg-cyan-600 text-white';
+        clearPendingAnalysisRender();
         renderAnalysisView(recordedData);
     }
 }
